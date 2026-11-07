@@ -378,8 +378,9 @@ func TestMCPToolReportsWhatTheCanvasCalledAFailure(t *testing.T) {
 	}
 }
 
-// TestMCPToolSaysWhenNoCanvasIsWatching: a session lives as long as its socket, so a call that arrives after
-// the page is gone has nobody to run it — and has to be answered anyway, in words a reader can act on.
+// TestMCPToolSaysWhenNoCanvasIsWatching: the agent outlives the page, so a tool call it makes while nobody
+// is looking has nobody to run it — and has to be answered anyway, in words the agent can act on. It is not
+// the end of the session: the next page runs the next call.
 func TestMCPToolSaysWhenNoCanvasIsWatching(t *testing.T) {
 	server, api, _ := startMCPServer(t)
 	session := canvasSession(t, server)
@@ -392,8 +393,11 @@ func TestMCPToolSaysWhenNoCanvasIsWatching(t *testing.T) {
 	if result["isError"] != true {
 		t.Fatalf("a call with no canvas behind it is not an error: %v", result)
 	}
-	if text := textOfResult(t, result); !strings.Contains(text, "no agent") {
-		t.Fatalf("answer = %q, want it to say no agent is attached", text)
+	if text := textOfResult(t, result); !strings.Contains(text, "no canvas is connected") {
+		t.Fatalf("answer = %q, want it to say no canvas is watching", text)
+	}
+	if got := spawns(t, os.Getenv("FAKE_SPAWN_LOG")); got != 1 {
+		t.Fatalf("spawned %d agents, want the one the session already had", got)
 	}
 }
 

@@ -4,7 +4,7 @@ import { ArrowUp, Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, Eraser,
 
 import { citationLabel, mentionResolver, referenceBlock, referenceLine, type Citation, type MentionSegment } from "@/lib/canvas/agent-references";
 import { insertSpoken } from "@/lib/canvas/agent-dictation";
-import { agentIsWorking, agentRunState, textOf, transcriptEvent, transcriptWindow, type AgentRunState, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
+import { agentIsWorking, agentRunState, resumeTurn, textOf, transcriptEvent, transcriptWindow, type AgentRunState, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
 import { contextSegment, speedSegment } from "@/lib/canvas/agent-usage";
 import { nodeContentOf } from "@/lib/canvas/node-prompt-field";
 import { reasoningPreview } from "@/lib/canvas/reasoning-preview";
@@ -230,9 +230,14 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
     useEffect(() => {
         if (!open) return;
         void connectRef.current();
-        // Closing the panel closes the socket and leaves the agent: the tab going away is not the user
-        // giving up on the conversation, and reopening it finds the same history.
-        return () => closeAgentSession(session);
+        // Closing the panel closes the socket and leaves the agent — with the turn it is running, which is
+        // now the canvas's and not this window's. The wait this window was drawing ends with the window:
+        // reopening it asks the session again (the `turn` frame), so nothing here is remembered.
+        return () => {
+            closeAgentSession(session);
+            setBusy(false);
+            setSteering(0);
+        };
     }, [open, session]);
 
     useEffect(() => onAgentEvent(session, applyEvent), [session]);
@@ -249,6 +254,15 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
             // A queue nobody can see looks like a message that was lost, so it is counted — and cleared by
             // the one frame that says the whole queue went in.
             setSteering((current) => (event.phase === "queued" ? current + 1 : 0));
+            return;
+        }
+        if (event.type === "turn") {
+            // What the session says about itself, which the transcript cannot: a replayed conversation is all
+            // finished messages, exactly like a turn that has not said anything yet. It arrives on connect,
+            // and it is the only thing that can say "the words below are the beginning of an answer that is
+            // still going" — the agent outlives this socket, so the panel may join one already running.
+            setBusy(event.running === true);
+            if (event.running) setMessages(resumeTurn);
             return;
         }
         if (event.type === "delta" || event.type === "reasoning" || event.type === "tool_call" || event.type === "tool_result") {

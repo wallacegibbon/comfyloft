@@ -100,7 +100,13 @@ func (s *Server) handleCanvasSave(ctx *httpx.Ctx) error {
 }
 
 // handleCanvasDelete implements DELETE /api/canvases/{id}.
+//
+// The agent belongs to the canvas, so it ends here first: its conversation file lives inside the directory
+// this is about to remove, and a process still running would write it back — resurrecting a canvas nobody
+// has. The agent is released before the directory goes, the same order the delete route for a conversation
+// uses for the same reason.
 func (s *Server) handleCanvasDelete(ctx *httpx.Ctx) error {
+	s.agentSessions.Close(canvasSessionPrefix+ctx.R.PathValue("id"), "canvas deleted")
 	if err := s.canvases.Delete(ctx.R.PathValue("id")); err != nil {
 		return canvasError(err)
 	}

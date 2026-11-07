@@ -2622,20 +2622,22 @@ no-reference path is the same expression it was before this change.
 
 ## 80. An agent's life belongs to the client that opened it
 
-**Decision** A connected agent is one process per client-chosen name, held until that client disconnects.
+**Decision** A connected agent is one process per client-chosen name, held until the client ends it.
 Nothing expires. Opening it again under the same name is idempotent: the same name returns the same
-process, which is how a reloaded page finds the conversation it left. The conversation route requires a
-name and writes into that process without ever spending it (see #82 for the transport that carries it). The nameless one-shot route that once sat beside it is gone (#83).
+process, which is how a reloaded page finds the agent — and the conversation — it left. The conversation
+route requires a name and writes into that process without ever spending it (see #82 for the transport
+that carries it). The nameless one-shot route that once sat beside it is gone (#83).
 
 **Why** A conversation is the point of this process: an agent that forgot what it had done while the
 user was thinking would be worse than no agent. An idle timer cannot know the difference between "the
 user gave up" and "the user is reading a video that takes six minutes", and it took the history away in
-both cases. So the only thing that ends an agent is the user closing it.
+both cases. So the only thing that ends an agent is the user ending the conversation — an act, and never a
+connection that merely stopped being read (#100).
 
 **The cost, stated plainly** A tab that is closed by the browser rather than the user leaves its process
 behind, and a gateway that is killed takes the map with it. Both are accepted: the first is the price of
-a history that survives a reload, and the second is why the canvas has to say "已断开" rather than
-pretend the agent is still there. The disconnect route is the one way out, and it is the client's job to
+a turn that is not killed by a reload, and the second is why the canvas has to say "已断开" rather than
+pretend the agent is still there. The delete route is the one way out, and it is the client's job to
 call it.
 
 **The key is the client's, not the gateway's** The name is whatever the client files the process under;
@@ -2655,9 +2657,11 @@ arrive inside one task, and the task ends once. The gateway relays all three as 
 `tool_result` events and answers none of them. That measurement is also why there is no reader goroutine
 fanning out to subscribers: the agent only speaks when spoken to, so the read loop stays in the request.
 
-**A cancelled turn is not a dead agent** A client that goes away mid-answer sends `CI cancel` and the
-frames that arrive while it winds down are read and dropped, so the next turn does not inherit them. Only
-a process that ends before its turn does returns `ErrGone`, and that releases the session.
+**A socket going away is not a cancelled turn** A page that leaves mid-answer no longer sends `CI cancel`:
+the turn is the canvas's, and the answer it was producing is worth having when the page comes back. The
+frames that arrive while nobody is reading are added to the session's transcript and dropped from the wire,
+so the page that reconnects is shown them. Only a process that ends before its turn does returns `ErrGone`,
+and that releases the session.
 
 **Tested** On `:8191` with a real AlayaCore: `connect` twice with one name returned one pid; two
 questions on that session both answered ("收到", then "还在") from the same process; the tool round
@@ -3162,46 +3166,66 @@ account buttons: no readout, no zeros. `POST /api/system/free-memory` there retu
 `sysinfo.FromComfy` unit tests (units, `nil` for no device, index fallback).
 
 
-## 100. The conversation is a file, and the process is only what works on it
+## 100. The conversation is a file, and the agent belongs to the canvas
 
 **Decision** Every agent session is spawned with `alayacore --session <file>`, one file per session name,
-in `DATA_DIR/agent/sessions/`. The process now lives exactly as long as its socket instead of outliving it,
-and the conversation comes back the way AlayaCore offers it: a new process replays the file before it says
-`session ready`, and the gateway relays that as one `history` event. The panel draws `history` by
-**replacing** its messages, not appending. The canvas panel's session name became `canvas:<canvasId>` —
-it was the bare `"canvas"` for every canvas, one conversation shared by all of them.
+inside the canvas that owns it: `<CANVAS_ROOT>/<id>/session.alaya`. The file is what outlives the process —
+it is the record a new process replays before it says `session ready`.
 
-**Why** The panel kept its transcript in `useState`, so a reload showed an empty panel while the agent, in
-a process that had survived the reload, still remembered everything: a blank screen answering from
-invisible context. That was the worst of both worlds — worse than either side forgetting.
+The **process belongs to the canvas**, and a socket is only a reader of it. It is started by the first
+connection and released by an act: `{"close":true}`, `DELETE /api/agent/session/{id}`, deleting the canvas,
+or the process dying. A socket that goes away — a reload, a panel closed and reopened, a second tab, a
+dropped connection — releases nothing and cancels nothing, so a turn in flight keeps running with nobody
+reading it, and its words are in the conversation when a page comes back.
 
-The fix is not in the page. AlayaCore already keeps a conversation when told where to put it, and already
-replays it on start (a 733-byte file for one turn, `context_tokens: 222` restored before `ready`). What was
-missing was the two things that let it happen: a file to write to, and a process short-lived enough to
-have to read it. Keeping the process alive across reloads was the very thing that prevented the replay.
+A connection is shown the conversation from the session's own **transcript**
+(`internal/agent/history.go`): the frames the agent has sent, folded the way the session file is folded —
+`UX`/`UF` as they arrived, `AF` joined from the two frames a call is said in, `Ax` tokens merged into the
+`AX` the message would have carried. It is seeded with the startup replay of a new process and appended to
+as the agent speaks, so "what has been said" has one answer whether the process was just started or has been
+running for an hour. The panel draws `history` by **replacing** its messages, not appending, and it is told
+whether a turn is in flight (`turn`) because a replayed conversation and a turn that has not spoken yet look
+identical: every message in both is finished.
 
-Two frames made this safe to wire, and both were checked against the real binary: replayed content arrives
-as **complete** `UX`/`AX` frames carrying text, while a live turn ends its messages with `AX` frames that
-carry **no** text at all — so "text present" is the whole difference between history and a full stop, and
-nothing is drawn twice. `UX` echoes exist in both cases, which is why history is defined by _when_ it
-arrives (before `ready`), not by its tag.
+The canvas panel's session name is `canvas:<canvasId>` — it was the bare `"canvas"` for every canvas, one
+conversation shared by all of them.
 
-The name had to change with the file. One name for every canvas meant one file for every canvas: what was
-said on one canvas would be replayed on the next.
+**Why the file** The panel kept its transcript in `useState`, so a reload showed an empty panel while the
+agent, in a process that had survived the reload, still remembered everything: a blank screen answering from
+invisible context. That was the worst of both worlds — worse than either side forgetting. AlayaCore already
+keeps a conversation when told where to put it and replays it on start; what was missing was a file to write
+to.
 
-**Tested** In a browser against a real AlayaCore (`gateway :8191` → `Test / qwen3.8-27b`): asked the panel
-to remember a code word, got `好的`; the session file `canvas-UyrJZS8t68LWjeruICYOR-bb5c104f.session`
-appeared (744 bytes) and the live process's command line carried
-`--session /tmp/gw8191/data/agent/sessions/canvas-UyrJZS8t68LWjeruICYOR-bb5c104f.session`. Reloaded the
-page, reopened the panel: both messages were there. Asked "刚才让你记的暗号是什么?" and the answer was
-`紫罗兰` — the context, not just the text, had come back in a new process. Closing and reopening the panel
-inside the same page showed the same four messages and no duplicates, so a replay replaces. The gateway log
-for the whole sequence: `released session=… reason=socket closed`, then `spawn … spawned=true`.
+**Why the process is not the socket's** This entry used to say the opposite — "the process lives exactly as
+long as its socket" — because a *new* process replaying the file was the only way a connection could be shown
+a conversation at all. That made a socket the owner of an agent, and the price was paid by the user: closing
+the panel or reloading the page killed a running turn mid-sentence and said nothing about it. Measured, on
+`V100 Home / Generic model` (a 24 s first token at 101 k tokens of context): a turn was waiting on the
+model, the panel was closed and reopened 63 s later, and the answer never came — the sentence that announced
+a tool call stayed the last thing on screen, and the panel then showed a wait nothing could end, because the
+turn it was waiting for had died with the socket (the number restarted at the reopen, 190 s of it).
+The transcript is what removes the trade: a live process can be asked what it has said, so a new connection
+no longer needs a new process. The old rule survives where it is right — a *node panel* is released with its
+panel (#83), because a node nobody is asking has no conversation to keep.
 
-Go: `TestSocketGoingAwayReplaysTheConversation` (fake agent that keeps its own session file: prompt, drop
-the socket, reconnect, and the new process replays the question and the answer); `TestMCPToolSaysWhenNoCanvasIsWatching`
-now reports the session's disappearance; the workspace tests read the new `agent/workspaces/` path.
-`make check`, `make test-race`, `npm run check`, `vitest 125` green.
+**Why the frames and not the events** `UX` and `UF` carry pictures and films as data URLs, and a block the
+gateway does not understand is still content the conversation holds. Keeping the wire form means nothing is
+dropped on the way in, and a later decoder that learns to draw a video block finds it already recorded
+(#88 is the same rule on the tool path). The translation to events stays in `replayed()`, shared with the
+startup replay, so a conversation drawn after a reload cannot drift from the one that was watched happen.
+The server's own `tool` events are not frames and are never kept: replaying one would run a tool twice.
+
+**Tested** Go, against a fake agent that speaks the same wire: `TestASocketGoingAwayKeepsTheAgent` (a prompt,
+the socket closed, one spawn — and the next connection is given `user,tool_call,tool_result,delta`, the call
+joined from its two frames); `TestAReloadInTheMiddleOfATurnKeepsIt` (a two-second turn, the socket closed at
+300 ms, the new connection told `running: true`, and the answer arriving on it); `TestTranscriptFolds…`,
+`TestTranscriptKeepsWhatWasSaidWhenTheTurnIsCut` and `TestTranscriptKeepsAToolResultWhole` (the folding, and
+a media result kept byte for byte); `TestSessionKeepsTheConversationWithNobodyWatching`;
+`TestSocketCloseReleasesTheAgent` and `TestDeletingACanvasTakesItsConversationWithIt` (the two acts that still
+end one). In a browser, the sequence above is the reproduction: the same canvas, the panel closed and
+reopened, the agent still there with its 50 MB conversation — and before this, the turn it was running gone.
+`make check`, `make test-race`, `npm run check`, `npx vitest run` green.
+
 
 
 ## 101. A replayed citation shows the words, not the block
@@ -3265,7 +3289,9 @@ the first. Old canvases are repaired on load rather than left to fail, which is 
 **Decision** `DELETE /api/agent/session/{session}` releases the process if one is running, removes the
 session file and the session's workspace, and answers `{ok, removed}`. The canvas calls it for each canvas
 it deletes — from the canvas menu and from the multi-select dialog — with the name it already owns
-(`canvas:<canvasId>`), fire and forget.
+(`canvas:<canvasId>`), fire and forget. The server does it too, on `DELETE /api/canvases/{id}`, because a
+conversation file lives inside the directory that route removes and a process still running would put it
+back: the client's call is the fast path, and the server's is the one that cannot be forgotten (#100).
 
 **Why** A conversation now outlives the page, which is the point, but a canvas does not outlive the canvas.
 Without this, every deleted canvas left a file in `DATA_DIR/agent/sessions/` that nothing would ever read

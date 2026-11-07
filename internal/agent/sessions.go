@@ -13,12 +13,18 @@ import (
 	"comfyloft/internal/logx"
 )
 
-// Session is one agent process, held for as long as the connection that owns it is open.
+// Session is one agent process, held for as long as the canvas it belongs to exists.
 //
-// Its life is the connection's: a socket starts one, everything the user says goes into the same
-// process, and it is released when that socket ends. Nothing is lost by that, because the conversation
-// is not in the process — AlayaCore keeps it in the file named by `--session`, and the next process
-// replays it. Memory lives in the file; the process is only the hands that work on it.
+// Its life is the canvas's, not a connection's. A socket starts one, but a socket that ends does not end
+// it: a reload, a closed panel and a second tab are one event here — nobody is looking right now — and none
+// of them is the user saying they are done. So a turn keeps running with no page attached, and the next
+// connection finds the same process with the same conversation in front of it. Only an explicit end
+// releases it: the `close` message, the delete route, the canvas going away, or the process dying.
+//
+// What that next connection is shown comes from `talk` — the frames the agent has said, kept because a live
+// process has no way to repeat itself. The file named by `--session` is still what outlives the process;
+// the transcript is what makes the conversation readable *while* it runs, and what a reload draws instead
+// of an empty panel.
 //
 // The key is whatever the client called it (the canvas id, in practice). The server does not know or
 // care what it means: it is a name a process is filed under, and the same name always finds the same
@@ -42,9 +48,14 @@ type Session struct {
 	// the agent would read nonsense.
 	write sync.Mutex
 
-	// mu guards the watcher. The pump reads the process whether or not anyone is listening — a socket
-	// can be closed at any moment, and a reader that was only alive while a socket was would be stuck
-	// inside a blocking read nobody can interrupt.
+	// talk is the conversation as the agent sent it, for the page that connects after the words were said —
+	// a reload, a panel reopened, a second tab. Guarded by mu with the watcher, because the pump writes it
+	// while a connection reads it.
+	talk transcript
+
+	// mu guards the watcher and the transcript above. The pump reads the process whether or not anyone is
+	// listening — a socket can be closed at any moment, and a reader that was only alive while a socket
+	// was would be stuck inside a blocking read nobody can interrupt.
 	mu   sync.Mutex
 	sink func(Event) error
 	// watchGeneration counts watch handovers, so a connection replaced by a newer one cannot clear the
@@ -67,14 +78,15 @@ type Session struct {
 	gone func(reason string)
 }
 
-// Connected is what a new connection gets: the session it now owns, and the agent's own startup
-// broadcast, which is where the model list comes from.
+// Connected is what a new connection gets: the session it now reads, the agent's own startup broadcast,
+// which is where the model list comes from, and the conversation so far.
 type Connected struct {
 	Session *Session
 	Startup Event
-	// History is the conversation the new process replayed from its session file, oldest first, as the
-	// events it would have sent live. It is empty when the agent was already running (there was nothing to
-	// replay) and when there was no file.
+	// History is the conversation this session is holding, oldest first, as the events it sent live: the
+	// frames it replayed from its file and everything it has said since. It is the same answer whether the
+	// process was just started or has been running for an hour — a page that connects is drawing the
+	// agent's conversation, and the agent's conversation is the same thing either way.
 	History []Event
 	Spawned bool
 }
@@ -92,14 +104,14 @@ func NewSessions(log *logx.Logger) *Sessions {
 }
 
 // Connect returns the agent filed under this name, starting one if there is none. Connecting twice is
-// the same as connecting once: a canvas has one agent. A page that comes back after its socket went
-// away does not find the same process — it finds the same conversation file, replayed into a new one.
+// the same as connecting once: a canvas has one agent. A page that comes back — a reload, a panel reopened,
+// a second tab — finds that same process, still working, and is handed the conversation it is holding.
 func (s *Sessions) Connect(ctx context.Context, id string, opts SpawnOptions) (Connected, error) {
 	if id == "" {
 		id = newSessionID()
 	}
 	if existing, ok := s.Lookup(id); ok {
-		return Connected{Session: existing, Startup: snapshotEvent(existing)}, nil
+		return Connected{Session: existing, Startup: snapshotEvent(existing), History: existing.replay()}, nil
 	}
 
 	// The spawn is outside the lock on purpose. It ends at the agent's `ready`, which is model loading,
@@ -109,13 +121,16 @@ func (s *Sessions) Connect(ctx context.Context, id string, opts SpawnOptions) (C
 	if err != nil {
 		return Connected{}, err
 	}
-	state, history, err := readStartup(proc)
+	state, replay, err := readStartup(proc)
 	if err != nil {
 		proc.Release()
 		return Connected{}, err
 	}
 
 	session := &Session{ID: id, proc: proc, state: state, pending: map[string]chan toolAnswer{}, Log: s.Log}
+	// The conversation it replayed from its file is where this session's begins: the frames are what every
+	// page from here on is shown, and a process that starts in the middle of one is not a special case.
+	session.talk.keep(replay)
 	session.gone = func(reason string) { s.Close(id, reason) }
 
 	// Two connects can now race for one name. The first to file owns it and the other releases what it
@@ -128,7 +143,7 @@ func (s *Sessions) Connect(ctx context.Context, id string, opts SpawnOptions) (C
 		if s.Log != nil {
 			s.Log.Info("agent: connect session=%s raced; keeping pid=%d", id, existing.proc.Cmd.Process.Pid)
 		}
-		return Connected{Session: existing, Startup: snapshotEvent(existing)}, nil
+		return Connected{Session: existing, Startup: snapshotEvent(existing), History: existing.replay()}, nil
 	}
 	s.list[id] = session
 	s.mu.Unlock()
@@ -137,7 +152,7 @@ func (s *Sessions) Connect(ctx context.Context, id string, opts SpawnOptions) (C
 	if s.Log != nil {
 		s.Log.Info("agent: connected session=%s pid=%d models=%d %s", id, proc.Cmd.Process.Pid, len(state.models), destinationLine(state.destination()))
 	}
-	return Connected{Session: session, Startup: state.event(), History: history, Spawned: true}, nil
+	return Connected{Session: session, Startup: state.event(), History: session.replay(), Spawned: true}, nil
 }
 
 // Lookup returns the session filed under this name, if there is one.
@@ -236,10 +251,14 @@ func (s *Sessions) CloseAll(reason string) {
 // person is looking at. Deltas are still never split: exactly one sink receives them, and the old one
 // hears `closed` and can reconnect.
 //
-// The returned function detaches this connection and reports whether it was still the reader. Only the
-// connection that is still the reader may release the agent — a replaced connection's socket closing is
-// not the end of the conversation, and the tab that took the session over must not lose its process
-// because the tab it replaced was closed (#160). The call is idempotent: the second call reports false.
+// The returned function detaches this connection. It does nothing to the agent: a socket going away is not
+// the end of the conversation (#160's rule, now the rule for every socket rather than only a replaced one),
+// and the process stays for whoever connects next. What is left to do on the way out is the tool calls this
+// connection was supposed to answer — the page that would have run them is gone, and that is the answer.
+//
+// It reports whether this connection was still the reader. A socket that a newer one replaced has nothing to
+// detach, and the caller that has an ending to decide — a name with no conversation to come back to — must
+// not end a session that now belongs to somebody else (#83, #160).
 func (s *Session) Watch(sink func(Event) error) (stop func() bool) {
 	s.mu.Lock()
 	previous := s.sink
@@ -404,6 +423,25 @@ func (s *Session) publish(event Event) {
 	}
 }
 
+// recordFrame files one frame of the conversation, whether or not anyone is listening.
+//
+// It is a frame and not an event because a frame is what the conversation is: `UX` and `UF` carry their
+// media, and a page that connects later is shown them through the same translation a session file gets.
+// The `tool` events the canvas runs are not frames and never reach here, which is what keeps a replay from
+// running a tool a second time.
+func (s *Session) recordFrame(frame *Frame) {
+	s.mu.Lock()
+	s.talk.record(frame)
+	s.mu.Unlock()
+}
+
+// replay is the conversation so far, as the events a page draws it with.
+func (s *Session) replay() []Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.talk.events()
+}
+
 // pump is the session's one reader, for the whole life of the process.
 func (s *Session) pump() {
 	for {
@@ -413,6 +451,10 @@ func (s *Session) pump() {
 			s.gone("exited")
 			return
 		}
+		// Before it is relayed, and before the turn is asked what it ended on: the conversation has to be
+		// readable by whoever connects next, and there may be nobody connected now — the words of a turn
+		// that runs while the panel is closed are exactly what a reload is meant to find.
+		s.recordFrame(frame)
 		// The end of a turn is a marker, not a second copy of the answer: the deltas already carried it,
 		// and two strings that agree until they do not are worse than one.
 		//
@@ -510,10 +552,11 @@ func destinationLine(where string) string {
 }
 
 // readStartup reads the frames an agent emits before it accepts input: its own startup broadcast, and
-// the conversation it replayed from its session file.
-func readStartup(proc *Process) (startup, []Event, error) {
+// the conversation it replayed from its session file. The frames come back as they arrived, because they
+// are the beginning of the session's transcript rather than something to draw once and throw away.
+func readStartup(proc *Process) (startup, []Frame, error) {
 	state := startup{}
-	history := []Event{}
-	err := waitReady(proc, &state, &history, func(Event) {}, func() error { return nil })
-	return state, history, err
+	var replay []Frame
+	err := waitReady(proc, &state, &replay, func(Event) {}, func() error { return nil })
+	return state, replay, err
 }

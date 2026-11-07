@@ -220,29 +220,38 @@ prefix is the only thing the server reads about a name — it never learns what 
 care which canvas a name points at beyond where the file goes.
 
 A canvas's name also owns a **conversation file**: `<CANVAS_ROOT>/<id>/session.alaya`, passed to AlayaCore
-as `--session`. That file, not the process, is the conversation, and it is part of the canvas — deleting
-the canvas deletes it, copying the canvas's directory copies it (decisions #178). It is not part of the
-document, so an export carries the nodes and their media and not what was said about them. The process
-lives exactly as long as its socket, and the next connection starts a new one that replays the file before
-it says it is ready — which the server relays as one `history` event carrying those frames as the events a
-live turn sends (`user`, `reasoning`, `tool_call`, `tool_result`, `delta`), so a reloaded page draws what was
-said, thought and called instead of an empty panel (decisions #223).
+as `--session`. That file, not the process, is what outlives a process, and it is part of the canvas —
+deleting the canvas deletes it, copying the canvas's directory copies it (decisions #178). It is not part of
+the document, so an export carries the nodes and their media and not what was said about them.
+
+The **process belongs to the canvas**, not to a connection: it is started by the first connection and
+released only when the conversation is ended (below). A reload, a panel closed and reopened, a second tab —
+all the same event to the server, "nobody is looking right now" — leave the agent running, a turn in flight
+included. A page that connects is then given the conversation as one `history` event, carrying the frames
+as the events a live turn sends (`user`, `reasoning`, `tool_call`, `tool_result`, `delta`), so it draws what
+was said, thought and called instead of an empty panel (decisions #223). Where those frames come from
+depends on the process and not on the page: one that has just started replays its file, and one that has
+been running all along is read back from the session's own transcript.
 
 A name that is not a canvas keeps no file at all: a node panel asks one question at a time and writes the
 answer into the node, so a file there would carry an earlier question into the next answer and leave one
 per node on disk.
 
-The lifetimes differ and the client owns both, because the client is what knows when a surface went
-away. The canvas's session lives until it says `{"close":true}`; a node panel's ends when the panel does,
-so a node nobody is working on holds no process. Nothing expires on the server's side — see
-[`decisions.md`](decisions.md) #80 for the cost of that.
+The lifetimes differ and both are the client's to end, because the client is what knows a conversation is
+over rather than merely unwatched. A canvas's session lives until the conversation says `{"close":true}` or
+its canvas is deleted; a name that keeps no conversation — the models editor — ends with its socket, so a
+form that is closed holds no process. A socket going away is not an ending for a canvas: nothing is released
+because a page stopped reading, which is what lets a turn finish while the panel is shut. Nothing expires on
+the server's side — see [`decisions.md`](decisions.md) #80 for the cost of that.
 
-Down the socket: `models`, `history`, `user`, `delta`, `reasoning`, `model`, `reasoning_level`, `command`,
-`tool_call`, `tool_result`, `notice`, `usage`, `steering`, `tool`, `done`, `error`, `closed`. The first message is the
-agent's startup broadcast, which is where the model list comes from; `history` follows it, carrying the
-conversation the agent just replayed. Up: `{"prompt":…}` (with optional `images` as data URLs),
-`{"command":…,"args":…}` for one of AlayaCore's own settings, `{"cancel":true}`, `{"toolResult":…}` for a
-tool the agent asked for, and `{"close":true}`.
+Down the socket: `models`, `history`, `turn`, `user`, `delta`, `reasoning`, `model`, `reasoning_level`,
+`command`, `tool_call`, `tool_result`, `notice`, `usage`, `steering`, `tool`, `done`, `error`, `closed`.
+The first message is the agent's startup broadcast, which is where the model list comes from; `history`
+follows it, carrying the conversation the session is holding; `turn` follows that, saying whether a turn is
+in flight — a replayed conversation is all finished messages, and so is a turn that has not produced its
+first one, so the transcript alone cannot tell a page which of the two it is looking at. Up: `{"prompt":…}`
+(with optional `images` as data URLs), `{"command":…,"args":…}` for one of AlayaCore's own settings,
+`{"cancel":true}`, `{"toolResult":…}` for a tool the agent asked for, and `{"close":true}`.
 
 `notice` is AlayaCore's `SM notify` — the agent saying what it is doing to itself ("Summarizing
 conversation…", "retrying in 5s (retry 1/3)"). It is not conversation, so it is not in the session file, and

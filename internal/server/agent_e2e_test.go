@@ -164,23 +164,65 @@ func socketURL(server *httptest.Server, session string) string {
 	return "ws" + strings.TrimPrefix(server.URL, "http") + "/api/agent/socket/" + session
 }
 
-// openSocket dials a canvas's conversation and drains the startup broadcast and the replayed conversation,
-// which is what a client does before it says anything.
+// openSocket dials a canvas's conversation and drains what a client is given before it says anything: the
+// startup broadcast, the conversation so far, and whether a turn is running.
 func openSocket(t *testing.T, server *httptest.Server, session string) *comfy.WSConn {
+	t.Helper()
+	conn, _, _ := connect(t, server, session)
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// connect is openSocket that keeps what it read: the conversation the session is holding, and whether a
+// turn is in flight. Three messages, in this order, every time — a page draws itself from them and asks
+// nothing else.
+func connect(t *testing.T, server *httptest.Server, session string) (*comfy.WSConn, []any, bool) {
 	t.Helper()
 	conn, err := comfy.DialWS(context.Background(), socketURL(server, session))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
 	if first := nextEvent(t, conn); first["type"] != "models" {
 		t.Fatalf("first message = %v, want the agent's startup broadcast", first)
 	}
-	// Then the conversation the agent replayed, always — empty for a fresh one.
-	if second := nextEvent(t, conn); second["type"] != "history" {
-		t.Fatalf("second message = %v, want the replayed history", second)
+	// Then the conversation the session is holding, always — empty for a fresh one.
+	history := nextEvent(t, conn)
+	if history["type"] != "history" {
+		t.Fatalf("second message = %v, want the replayed history", history)
 	}
-	return conn
+	// Then whether a turn is in flight, which a page cannot tell from the transcript.
+	turn := nextEvent(t, conn)
+	if turn["type"] != "turn" {
+		t.Fatalf("third message = %v, want the state of the turn", turn)
+	}
+	replayed, _ := history["history"].([]any)
+	running, _ := turn["running"].(bool)
+	return conn, replayed, running
+}
+
+// kindsOf is the types of a replayed conversation, in order: what a page would draw it from.
+func kindsOf(replayed []any) string {
+	kinds := make([]string, 0, len(replayed))
+	for _, entry := range replayed {
+		event, _ := entry.(map[string]any)
+		kind, _ := event["type"].(string)
+		kinds = append(kinds, kind)
+	}
+	return strings.Join(kinds, ",")
+}
+
+// replayedText is the answer as a replayed conversation carries it: the deltas, in order.
+func replayedText(replayed []any) string {
+	var text string
+	for _, entry := range replayed {
+		event, _ := entry.(map[string]any)
+		if event["type"] == "delta" {
+			if said, ok := event["text"].(string); ok {
+				text += said
+			}
+		}
+	}
+	return text
 }
 
 // nextEvent reads one message from the socket.
@@ -351,7 +393,7 @@ func TestTheReplacedSocketDoesNotTakeTheAgentWithIt(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer second.Close()
-	for _, want := range []string{"models", "history"} {
+	for _, want := range []string{"models", "history", "turn"} {
 		if event := nextEvent(t, second); event["type"] != want {
 			t.Fatalf("second socket got %v, want %s", event, want)
 		}
@@ -418,6 +460,43 @@ func TestSessionThatIsNotACanvasKeepsNothing(t *testing.T) {
 	// There is nowhere for it to go: a conversation is kept inside its canvas, and this name is not one.
 	if file, err := api.sessionFile("settings"); err == nil {
 		t.Fatalf("a session that is not a canvas has a conversation file: %s", file)
+	}
+}
+
+// TestASessionWithoutAConversationEndsWithItsSocket: a name with nowhere to keep a conversation keeps no
+// process either. The models editor is a form — opened and closed with its window, asked one command — so
+// closing it is the end, and nothing would ever come back for the process (#83). A canvas is the opposite,
+// and that is the rule the whole lifetime turns on (#100).
+func TestASessionWithoutAConversationEndsWithItsSocket(t *testing.T) {
+	server, _, _ := startMCPServer(t)
+	conn, err := comfy.DialWS(context.Background(), socketURL(server, "settings"))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	for _, want := range []string{"models", "history", "turn"} {
+		if event := nextEvent(t, conn); event["type"] != want {
+			t.Fatalf("first messages = %v, want %s", event, want)
+		}
+	}
+	if got := spawns(t, os.Getenv("FAKE_SPAWN_LOG")); got != 1 {
+		t.Fatalf("spawned %d agents, want 1", got)
+	}
+
+	_ = conn.Close()
+	time.Sleep(300 * time.Millisecond)
+
+	// A form that was closed is not a conversation waiting to be reopened: the next visit starts a new agent.
+	again, err := comfy.DialWS(context.Background(), socketURL(server, "settings"))
+	if err != nil {
+		t.Fatalf("dial again: %v", err)
+	}
+	defer again.Close()
+	t.Cleanup(func() { _ = again.Close() })
+	if first := nextEvent(t, again); first["type"] != "models" {
+		t.Fatalf("first message = %v, want the startup broadcast", first)
+	}
+	if got := spawns(t, os.Getenv("FAKE_SPAWN_LOG")); got != 2 {
+		t.Fatalf("spawned %d agents, want a new one for the second visit", got)
 	}
 }
 
@@ -611,10 +690,10 @@ func TestSocketCloseReleasesTheAgent(t *testing.T) {
 	}
 }
 
-// TestSocketGoingAwayReplaysTheConversation: a dropped connection takes the process with it, and the next
-// connection gets a new process that replays what was said from the session file. That is what makes a
-// reloaded page show the conversation it left, and it is the reason the process may be this short-lived.
-func TestSocketGoingAwayReplaysTheConversation(t *testing.T) {
+// TestASocketGoingAwayKeepsTheAgent: a dropped connection is not the end of a conversation. The agent belongs
+// to the canvas, so it is still there — same process, same turn, same memory — and the page that comes back
+// is shown the conversation it left without a new agent and without a file being read.
+func TestASocketGoingAwayKeepsTheAgent(t *testing.T) {
 	server, spawnLog := startAgentServer(t)
 	session := canvasSession(t, server)
 	conn := openSocket(t, server, session)
@@ -627,51 +706,67 @@ func TestSocketGoingAwayReplaysTheConversation(t *testing.T) {
 	_ = conn.Close()
 	time.Sleep(300 * time.Millisecond)
 	if got := spawns(t, spawnLog); got != 1 {
-		t.Fatalf("spawned %d agents, want 1", got)
+		t.Fatalf("closing the socket spawned %d agents, want none: the agent is the canvas's", got)
 	}
 
-	// A new connection: a new process, and the words from the file — not an empty conversation.
-	next, err := comfy.DialWS(context.Background(), socketURL(server, session))
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
+	// The next connection: the conversation it left, relayed as the events a live turn sends.
+	next, replayed, running := connect(t, server, session)
 	defer next.Close()
 	t.Cleanup(func() { _ = next.Close() })
-	if first := nextEvent(t, next); first["type"] != "models" {
-		t.Fatalf("first message = %v, want the startup broadcast", first)
+	if running {
+		t.Fatal("no turn was running, and the new socket says one is")
 	}
-	history := nextEvent(t, next)
-	if history["type"] != "history" {
-		t.Fatalf("second message = %v, want history", history)
-	}
-	replayed, _ := history["history"].([]any)
-	// The file holds the whole turn — what was said, what was thought, the call and its result — and the
-	// replayed frames are relayed as the events a live turn sends, in the order the agent wrote them.
-	if len(replayed) != 5 {
-		t.Fatalf("replayed %v, want the question, the thinking, the call, its result and the answer", history["history"])
-	}
-	kinds := make([]string, 0, len(replayed))
-	for _, entry := range replayed {
-		frame, _ := entry.(map[string]any)
-		kinds = append(kinds, frame["type"].(string))
-	}
-	if got, want := strings.Join(kinds, ","), "user,reasoning,tool_call,tool_result,delta"; got != want {
-		t.Fatalf("replayed %s, want %s", got, want)
+	// What was said, the call it made, what came back, and the answer — the call once, not once per frame.
+	if got, want := kindsOf(replayed), "user,tool_call,tool_result,delta"; got != want {
+		t.Fatalf("replayed %s, want %s (%v)", got, want, replayed)
 	}
 	said := replayed[0].(map[string]any)
-	if !strings.Contains(said["text"].(string), "violet") {
+	if text, _ := said["text"].(string); !strings.Contains(text, "violet") {
 		t.Fatalf("first replayed entry = %v, want the user's words", said)
 	}
-	called := replayed[2].(map[string]any)
+	called := replayed[1].(map[string]any)
 	if called["name"] != "read_file" || !strings.Contains(called["input"].(string), "SKILL.md") {
-		t.Fatalf("replayed call = %v, want the call its arguments", called)
+		t.Fatalf("replayed call = %v, want the call and its arguments", called)
 	}
-	answered := replayed[4].(map[string]any)
-	if answered["text"] != "hello world" {
-		t.Fatalf("last replayed entry = %v, want the answer", answered)
+	if got := replayedText(replayed); got != "hello world" {
+		t.Fatalf("replayed answer = %q, want the words that were said", got)
 	}
-	if got := spawns(t, spawnLog); got != 2 {
-		t.Fatalf("spawned %d agents, want a fresh one on the new connection", got)
+	if got := spawns(t, spawnLog); got != 1 {
+		t.Fatalf("spawned %d agents, want the one the canvas already had", got)
+	}
+}
+
+// TestAReloadInTheMiddleOfATurnKeepsIt: the page goes away and comes back while the agent is still working.
+// Nothing is interrupted — AlayaCore's turn is nobody's socket's — the new connection is told that a turn is
+// in flight (the one thing a replayed conversation cannot say), and the answer lands on it.
+func TestAReloadInTheMiddleOfATurnKeepsIt(t *testing.T) {
+	server, spawnLog := startAgentServer(t)
+	session := canvasSession(t, server)
+	conn := openSocket(t, server, session)
+
+	// The fake agent takes two seconds over this one, which is the window the reload has to fit in.
+	send(t, conn, map[string]any{"prompt": "answer slowly"})
+	time.Sleep(300 * time.Millisecond)
+	_ = conn.Close()
+
+	next, replayed, running := connect(t, server, session)
+	defer next.Close()
+	t.Cleanup(func() { _ = next.Close() })
+	if !running {
+		t.Fatal("the new socket was told the agent is idle while a turn was running")
+	}
+	// The prompt is already part of the conversation: it is not waiting for a page to be watching.
+	if got, want := kindsOf(replayed), "user"; got != want {
+		t.Fatalf("replayed %s, want %s (%v)", got, want, replayed)
+	}
+
+	// And the answer arrives here — from the replay if it landed while nobody was reading, live if not.
+	seen := until(t, next, "done")
+	if got := replayedText(replayed) + textOf(seen); got != "slow answer" {
+		t.Fatalf("the answer was %q, want the agent's words whatever the reload did", got)
+	}
+	if got := spawns(t, spawnLog); got != 1 {
+		t.Fatalf("spawned %d agents, want the one that was already running", got)
 	}
 }
 

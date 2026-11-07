@@ -58,8 +58,8 @@ func (s *Server) startMCPListener() error {
 // bridge reports as "nowhere to send the call" — one sentence, one side.
 func (s *Server) mcpEndpoint() string { return s.mcpURL }
 
-// closeMCP stops the bridge listener. Its sessions are already gone by then: an agent process is
-// released when its socket closes, which happens on the same shutdown path.
+// closeMCP stops the bridge listener. Its sessions are already gone by then: the shutdown path releases
+// every agent process first (Sessions.CloseAll), which is also what ends the bridge's in-flight calls.
 func (s *Server) closeMCP() {
 	if s.mcpServer != nil {
 		_ = s.mcpServer.Close()

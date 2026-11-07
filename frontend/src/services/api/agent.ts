@@ -52,7 +52,7 @@ export type AgentModel = {
  * because the list of models comes from the agent itself.
  */
 export type AgentEvent = {
-    type: "models" | "user" | "steering" | "delta" | "reasoning" | "model" | "reasoning_level" | "command" | "tool_call" | "tool_result" | "notice" | "usage" | "tool" | "history" | "done" | "error" | "closed";
+    type: "models" | "user" | "steering" | "delta" | "reasoning" | "model" | "reasoning_level" | "command" | "tool_call" | "tool_result" | "notice" | "usage" | "tool" | "history" | "turn" | "done" | "error" | "closed";
     text?: string;
     elapsedMs?: number;
     models?: AgentModel[];
@@ -69,10 +69,14 @@ export type AgentEvent = {
     isError?: boolean;
     /** `tool`: what the agent wants run, as it sent it. The canvas is what runs it. */
     arguments?: unknown;
-    /** `history`: the conversation the agent replayed from its session file — the frames themselves, as
-     *  the events they would have been live, in the order the agent loaded them. Replaces what the panel
-     *  has. Nothing in it is a summary: reasoning, tool calls and their results are all there. */
+    /** `history`: the conversation this session is holding, as the frames it said — what a page that
+     *  connects draws instead of an empty panel. Replaces what the panel has. Nothing in it is a summary:
+     *  reasoning, tool calls and their results are all there. */
     history?: AgentEvent[];
+    /** `turn`: whether a turn is in flight, stated on connect. A replayed conversation is all finished
+     *  messages, and so is a turn that has not said anything yet, so this is the one fact that tells them
+     *  apart — and the server is the only side that knows it. Always stated, never omitted. */
+    running?: boolean;
     /** `steering`: `queued` when a message sent into a running task was taken into the queue, `delivered`
      *  when the agent has worked it into the conversation. */
     phase?: string;

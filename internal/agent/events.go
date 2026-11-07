@@ -40,6 +40,15 @@ type Event struct {
 	// command: the agent's answer to a CI frame
 	OK bool `json:"ok,omitempty"`
 
+	// turn: whether a turn is in flight, stated on connect and never guessed. A conversation replayed from
+	// the agent looks exactly like a turn that has not said anything yet — every message in it is finished —
+	// so a page that comes back has no way to tell the two apart from the transcript alone. This is the one
+	// fact that tells them apart, and the server is the only side that knows it.
+	//
+	// Always stated, never omitted, for the reason `serialToolCalls` is: an absent field would read as
+	// "not running", and a false answer is not the same thing as no answer.
+	Running bool `json:"running"`
+
 	// steering: `queued` when a message sent into a running task was taken into the queue, `delivered`
 	// when the agent has worked it into the conversation.
 	Phase string `json:"phase,omitempty"`
@@ -66,11 +75,11 @@ type Event struct {
 	// error: the agent's own words
 	Message string `json:"message,omitempty"`
 
-	// history: the conversation the agent loaded from its session file and replayed before it was ready.
-	// It is the frames themselves — the same events a live turn sends — so a reloaded page draws the
-	// conversation it left through the same code that drew it the first time: the agent's own record,
-	// read back by the agent, passed on unchanged. A reloaded page draws this instead of an empty panel,
-	// and it replaces whatever it had.
+	// history: the conversation this session is holding, as the events it sent live — what a page that
+	// connects draws instead of an empty panel. It arrives on every connection, for a process that was just
+	// started and for one that has been running for an hour, because it is the session's own record rather
+	// than a transcript of its startup. A reloaded page draws this instead of nothing, and it replaces
+	// whatever it had.
 	History []Event `json:"history,omitempty"`
 }
 
@@ -532,20 +541,21 @@ func replayed(frame *Frame) (Event, bool) {
 
 // waitReady reads startup frames until the session accepts input, then hands the collected state to
 // onReady. Everything before that is the agent's own startup broadcast and, when it was started with a
-// session file, the conversation it replayed from it — which is collected into history.
+// session file, the conversation it replayed from it — which is collected into replay as the frames it
+// arrived as, so the session can keep them rather than only draw them once.
 //
 // An agent that stops before `ready` is an error, not an empty startup: it said nothing about itself, so
 // the only account of why is the last line of its stderr, and a caller told "connected" would show an
 // empty model list over a process that is already gone.
-func waitReady(proc *Process, state *startup, history *[]Event, emit func(Event), onReady func() error) error {
+func waitReady(proc *Process, state *startup, replay *[]Frame, emit func(Event), onReady func() error) error {
 	for {
 		frame, err := proc.Read()
 		if err != nil || frame == nil {
 			return fmt.Errorf("the agent stopped before it was ready: %s", startFailure(proc, err))
 		}
-		if entry, ok := replayed(frame); ok {
-			if history != nil {
-				*history = append(*history, entry)
+		if _, ok := replayed(frame); ok {
+			if replay != nil {
+				*replay = append(*replay, *frame)
 			}
 			continue
 		}

@@ -235,6 +235,23 @@ function endTurn(messages: TranscriptMessage[]): TranscriptMessage[] {
     return messages.map((message) => (message.streaming ? { ...message, streaming: false } : message));
 }
 
+/**
+ * The answer at the end is still being written.
+ *
+ * A conversation handed to a page is a finished one — `history` ends every message, because a record is what
+ * was said. A turn, though, can be running while it is replayed: the agent belongs to the canvas now, so a
+ * page that comes back in the middle of one is shown the words so far and then the rest arrives live. Without
+ * this the rest would land in a second bubble, as if the agent had started over.
+ *
+ * Only an assistant message can be continued. A turn whose last word was the person's has said nothing yet,
+ * and appending to it would put the agent's words in the person's mouth.
+ */
+export function resumeTurn(messages: TranscriptMessage[]): TranscriptMessage[] {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant" || last.streaming) return messages;
+    return replace(messages, messages.length - 1, { ...last, streaming: true });
+}
+
 /** The same list with one item replaced, and the same list again when nothing changed. */
 function replace<T>(items: T[], at: number, item: T): T[] {
     return [...items.slice(0, at), item, ...items.slice(at + 1)];

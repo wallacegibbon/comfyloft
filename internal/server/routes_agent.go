@@ -157,21 +157,22 @@ func (s *Server) handleAgentSocket(ctx *httpx.Ctx) error {
 	// new one meant a second tab — or a socket somebody forgot to close — left every later question
 	// unanswered, with only `closed` in the log to show for it.
 	stopWatching := session.Watch(send)
-	// release ends the conversation, but only if this connection is still the one reading it. A socket
-	// that was replaced by a newer tab has nothing to release: the agent belongs to that tab now, and its
-	// process must not die because the tab it replaced was closed.
-	release := func() bool {
+	// The socket going away is not the end of the conversation: the agent belongs to the canvas, so it keeps
+	// running — a turn in flight finishes with nobody reading it, and the words land in the session's
+	// transcript for the page that comes back. Ending it is an act, not an accident: `close` on this socket,
+	// the delete route, or the canvas being deleted.
+	//
+	// Except for a name with nowhere to put a conversation: the models editor is a form, opened and closed
+	// with its window (#83), and nothing would ever come back to its process because there is nothing to come
+	// back to. The canvas is the surface that outlives its socket, and it is the one that keeps a file.
+	defer func() {
 		if !stopWatching() {
-			return false
+			return // a newer connection reads this session now, and the ending is not ours to decide
 		}
-		_ = session.Cancel("")
-		s.agentSessions.Close(session.ID, "socket closed")
-		if s.logger != nil {
-			s.logger.Info("agent: socket closed session=%s", session.ID)
+		if _, err := s.sessionFile(session.ID); errors.Is(err, errNotACanvas) {
+			s.agentSessions.Close(session.ID, "socket closed")
 		}
-		return true
-	}
-	defer release()
+	}()
 	if s.logger != nil {
 		s.logger.Info("agent: socket open session=%s spawned=%t", session.ID, connected.Spawned)
 	}
@@ -180,10 +181,17 @@ func (s *Server) handleAgentSocket(ctx *httpx.Ctx) error {
 	if err := send(connected.Startup); err != nil {
 		return nil
 	}
-	// Then the conversation it replayed from its session file — always, even when empty: a page that
-	// opens this socket is drawing the agent's conversation, and the agent has just said what that is.
-	// An empty list is the honest answer for a conversation that has not started yet.
+	// Then the conversation this session is holding — always, even when empty: a page that opens this
+	// socket is drawing the agent's conversation, and the agent has just said what that is. It is the same
+	// answer for a process that was started for this connection and for one that has been running all
+	// along, which is what makes a reload look like nothing happened.
 	if err := send(agent.Event{Type: "history", History: connected.History}); err != nil {
+		return nil
+	}
+	// Then whether a turn is running, which the transcript cannot say: a replayed conversation is all
+	// finished messages, and so is a turn that has not produced its first one. The agent outlives this
+	// socket, so the answer is not "no" by construction.
+	if err := send(agent.Event{Type: "turn", Running: session.Busy()}); err != nil {
 		return nil
 	}
 	// Then what this conversation is owed: runs it asked about that ended while nobody could be told
@@ -195,13 +203,9 @@ func (s *Server) handleAgentSocket(ctx *httpx.Ctx) error {
 	// socket through the pump, and what the user says is applied here until the socket ends.
 	s.readSocket(conn, session, send)
 
-	// The socket is gone. The agent has nobody reading it any more, so its current turn is asked to wind
-	// down — otherwise it would write into a pipe until it blocked — and then the process goes too.
-	//
-	// The conversation is not lost with it: AlayaCore keeps it in the session file, and the next connect
-	// starts a process that replays it. That is why the process may be this short-lived: a page that was
-	// reloaded is a new reader of the same file, not a stranger.
-	release()
+	// The socket is gone, and that is all that has happened. `defer stopWatching()` detaches this
+	// connection; the agent, the turn it is running and the conversation stay where they are, for this page
+	// when it comes back or for the tab that takes over.
 	return nil
 }
 

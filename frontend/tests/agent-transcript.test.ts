@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { referenceBlock, referenceLine } from "@/lib/canvas/agent-references";
-import { agentIsWorking, agentRunState, transcriptEvent, transcriptWindow, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
+import { agentIsWorking, agentRunState, resumeTurn, transcriptEvent, transcriptWindow, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
 import type { AgentEvent } from "@/services/api/agent";
 
 /**
@@ -258,5 +258,33 @@ describe("the tail a long conversation is drawn from", () => {
         const messages = [message(1), message(2)];
         expect(transcriptWindow(messages, 0).shown.map((each) => each.id)).toEqual(["m2"]);
         expect(transcriptWindow(messages, -5).shown.map((each) => each.id)).toEqual(["m2"]);
+    });
+});
+
+describe("a page that comes back in the middle of a turn", () => {
+    it("keeps writing into the answer that was already started", () => {
+        // What a reload draws: the conversation so far, every message finished, and then the frame that says
+        // a turn is still running. The rest of the answer belongs to the same message.
+        const replayed = fold({ type: "user", text: "整理一下布局" }, { type: "delta", text: "画布已整理完毕" });
+        const resumed = resumeTurn(replayed);
+        const messages = transcriptEvent(resumed, { type: "delta", text: "，现在聚焦到最终视频：" });
+
+        expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+        const answer = messages[1];
+        expect(answer.streaming).toBe(true);
+        expect(answer.parts).toHaveLength(1);
+        expect(answer.parts[0].kind === "text" && answer.parts[0].text).toBe("画布已整理完毕，现在聚焦到最终视频：");
+    });
+
+    it("leaves a conversation that ended where it is", () => {
+        const messages = fold({ type: "user", text: "画一只猫" }, { type: "delta", text: "好了" });
+        expect(resumeTurn(messages)).toBe(messages);
+    });
+
+    it("never makes the person's own words an answer", () => {
+        // A turn that has just begun: the last thing on screen is the prompt, and nothing has been said yet.
+        const messages = fold({ type: "user", text: "画一只猫" });
+        expect(resumeTurn(messages)).toBe(messages);
+        expect(resumeTurn([])).toEqual([]);
     });
 });
