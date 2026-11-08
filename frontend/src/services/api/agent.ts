@@ -83,6 +83,10 @@ export type AgentEvent = {
     /** `steering`: `queued` when a message sent into a running task was taken into the queue, `delivered`
      *  when the agent has worked it into the conversation. */
     phase?: string;
+    /** `steering`, `turn`: how many messages are waiting in the agent's queue, counted by the session from the
+     *  agent's own phases and stated with every event that changes it — so a page that comes back is told the
+     *  size instead of counting from nothing (#345). Absent means none. */
+    queued?: number;
     /** `usage`: the agent's own measurement of the work it is doing — how full the context is, and how
      *  fast the last step went. `models` carries the same three when the agent restored a count from a
      *  session file at startup. */

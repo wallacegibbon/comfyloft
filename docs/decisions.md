@@ -11494,3 +11494,44 @@ against the result: no pointer in a current-layout `Where` fails to resolve with
 six removed numbers are cited by nothing.
 
 **Where** `docs/decisions.md`, `docs/server.md`.
+
+## 345. The queue is counted once, where the page cannot lose it
+
+**Decision** The size of the agent's steering queue is counted by the session, from the agent's own phases — one
+`queued` per message taken into the queue, and `delivered`, `dropped` or `refused` ending that submission — and it
+is *stated* rather than recounted: every `steering` event carries the count, and the `turn` frame carries it too, so
+a page that connects joins the number instead of starting at zero. The panel keeps no tally: `steering` and `turn`
+both set it from the event's `queued`.
+
+**Why** The page counted — `+1` on `queued`, anything else `0`, and `0` on every `history`, which is every
+connection. So a reload mid-turn showed `Working… 90s` with no "(2 queued, …)" while the agent still held the
+messages, and reopening the panel or a second tab did the same; the only reason it was not noticed sooner is that a
+queue is usually short-lived. It is the fault #342 fixed one fact over: a number about the turn, kept by the page,
+and lost exactly when the page goes away. The agent states each phase and never the size, so the size is this side's
+*measurement of announcements* — the kind #343 allows, as the age of a turn is — and it belongs where the
+announcements are read, which is the pump.
+
+**Cost** One field on two events, one int under the turn's lock, and a closure in the pump so the session learns
+what it relays. A phase this build has not met is read as terminal: if AlayaCore grows a phase that does not end a
+submission, the count under-reports until this code learns it — the safe direction, because the next `queued`
+restates it, and a queue nobody can see is worse than a number that is behind.
+
+**Rejected** Seeding the page's tally from the frame and letting it count the rest: two counters, and the one that
+drifts is the one on screen. Deriving the size from the transcript: the agent echoes a queued message only when it
+is spliced, so a message in the queue has no echo by definition. A frame of its own for the queue: `steering`
+already exists and already carries the phase, and the size is one field on it and on `turn`.
+
+**Tested** `internal/agent/session_test.go` (`TestTheQueueIsCountedOnceAndStated`: two `queued` phases make the
+events state 1 and then 2, the session holds the same, and `delivered` states none).
+`internal/server/agent_e2e_test.go`: `TestAReloadInTheMiddleOfATurnKeepsIt` — a socket that reconnects a second
+into a turn with a message queued is told `queued: 1` along with the age; `TestASocketGoingAwayKeepsTheAgent` — an
+idle turn states no queue. In the browser, on an isolated server on `:8195` whose agent queues a message into a
+ninety-second turn: pressing Enter showed `Working… 3s (1 queued, used together after the current step)`, and `5s`
+before a reload; three seconds after the reload — a page that had existed for three seconds — it read `Working… 8s
+(1 queued, used together after the current step)`. Both the age and the queue survived, which is what the page's
+own tally could not do.
+
+**Where** `internal/agent/events.go` (`Queued`), `internal/agent/sessions.go` (`queued`, `noteSteering`, `Queued`,
+the pump's emit), `internal/server/routes_agent.go` (the connect frame), `internal/agent/session_test.go`,
+`internal/server/agent_e2e_test.go`, `frontend/src/services/api/agent.ts`,
+`frontend/src/components/canvas/canvas-agent-panel.tsx` (the `steering` and `turn` branches).

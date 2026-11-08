@@ -60,6 +60,13 @@ type Event struct {
 	// when the agent has worked it into the conversation.
 	Phase string `json:"phase,omitempty"`
 
+	// steering, turn: how many messages are waiting in the agent's steering queue, as this session counted them
+	// from the agent's own phases — one `queued` per submission, and `delivered`/`dropped`/`refused` ending that
+	// submission. The agent states each phase and never the size, so the size is this side's measurement of an
+	// announcement (#343); it is stated with every `steering` event and on `turn`, so a page that comes back joins
+	// the number instead of counting from nothing (#345).
+	Queued int `json:"queued,omitempty"`
+
 	// tool_call, tool_result: what the agent did between two sentences. A built-in tool runs inside
 	// AlayaCore, so both frames come back from it — the server relays them and answers neither.
 	CallID string `json:"callId,omitempty"`

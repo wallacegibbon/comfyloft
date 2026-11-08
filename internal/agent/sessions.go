@@ -70,9 +70,14 @@ type Session struct {
 	// The instant lives beside the flag rather than in the page because the page is the thing that goes away:
 	// a turn outlives the socket that started it, and a `turn` frame that says nothing about how long it has
 	// been running is a wait a reload restarts at zero (#342).
+	//
+	// `queued` is the same argument one fact over: the messages waiting in the agent's steering queue, counted
+	// from its phases (`queued` … `delivered`/`dropped`/`refused`) and stated to every page that connects, so a
+	// reload draws the queue instead of an empty one (#345).
 	busyMu  sync.Mutex
 	busy    bool
 	started time.Time
+	queued  int
 
 	// pending is the tool calls waiting for the canvas to answer them, by the id the server gave them,
 	// and calls counts the ones asked so far. A tool call is a question only the page can answer, so it
@@ -470,7 +475,14 @@ func (s *Session) pump() {
 		// state) does not fill the log.
 		s.stateMu.Lock()
 		before := s.state.destination()
-		change := turnStep(&s.state, frame, s.publish)
+		change := turnStep(&s.state, frame, func(event Event) {
+			// The session learns what it relays: a `steering` frame is the agent's statement about its queue, and
+			// the size it produces travels with the event, so no page has to keep the tally (#345).
+			if event.Type == "steering" {
+				event.Queued = s.noteSteering(event.Phase)
+			}
+			s.publish(event)
+		})
 		after := s.state.destination()
 		s.stateMu.Unlock()
 		if after != before {
@@ -536,12 +548,42 @@ func (s *Session) beginTurn() {
 }
 
 // endTurn is the task the agent announced as running being over. The flag and the instant it started are one
-// fact and are cleared together, so no reader can find a running turn with no start.
+// fact and are cleared together, so no reader can find a running turn with no start; the queue goes with it,
+// because a queue is messages waiting for a task that no longer runs.
 func (s *Session) endTurn() {
 	s.busyMu.Lock()
 	defer s.busyMu.Unlock()
 	s.busy = false
 	s.started = time.Time{}
+	s.queued = 0
+}
+
+// noteSteering applies one of the agent's steering phases and returns the size of the queue afterwards.
+//
+// The agent states a phase per submission and never the size: `queued` is one message taken into the queue, and
+// the three terminal phases (`delivered`, `dropped`, `refused`) end the submission that produced it. So the size
+// is a count of announcements — this side's measurement of what the agent said, which is what #343 allows —
+// and it is kept here rather than in the page because the page is what a reload replaces (#345).
+//
+// A phase this build has not met is read as terminal. That is the direction that keeps the row honest: a queue
+// nobody can see is worse than a number that under-reports, and the count is restated from zero with the next
+// `queued`.
+func (s *Session) noteSteering(phase string) int {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	if phase == "queued" {
+		s.queued++
+	} else {
+		s.queued = 0
+	}
+	return s.queued
+}
+
+// Queued is how many messages are waiting in the agent's queue for the running task.
+func (s *Session) Queued() int {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	return s.queued
 }
 
 // Cancel asks the agent to wind its current task down. A turn is the agent's to finish, so this is a

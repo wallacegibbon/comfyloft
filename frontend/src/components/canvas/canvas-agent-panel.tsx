@@ -278,9 +278,10 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
      */
     const applyEvent = (event: AgentEvent) => {
         if (event.type === "steering") {
-            // A queue nobody can see looks like a message that was lost, so it is counted — and cleared by
-            // the one frame that says the whole queue went in.
-            setSteering((current) => (event.phase === "queued" ? current + 1 : 0));
+            // A queue nobody can see looks like a message that was lost. The size travels with the frame,
+            // counted by the session from the agent's own phases, so the page draws it instead of keeping a
+            // tally of its own — the tally was what a reload lost (#345).
+            setSteering(event.queued ?? 0);
             return;
         }
         if (event.type === "turn") {
@@ -291,8 +292,10 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
             //
             // It is also the only thing that can say how long that answer has been going: `elapsedMs` is the
             // turn's age when the frame was written, and reading it against this page's own clock is what
-            // makes a reload continue the count instead of restarting it (#342).
+            // makes a reload continue the count instead of restarting it (#342). The queue travels with it for
+            // the same reason: a page that comes back is told how many messages are waiting (#345).
             setTurn(event.running ? { startedAt: turnStartedAt(event.elapsedMs, performance.now()) } : null);
+            setSteering(event.queued ?? 0);
             if (event.running) setMessages(resumeTurn);
             return;
         }
@@ -314,7 +317,6 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
             setTurn(null);
             setSteering(0);
         }
-        if (event.type === "history") setSteering(0);
         setMessages((current) => transcriptEvent(current, event));
     };
 

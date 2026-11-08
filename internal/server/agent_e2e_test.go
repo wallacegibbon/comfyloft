@@ -64,6 +64,7 @@ while IFS= read -r line; do
       printf '%s\n' "$line"
       if [ -n "$SESSION" ]; then printf '%s\n' "$line" >> "$SESSION"; fi
       printf 'SM{"type":"task","data":{"in_progress":true}}\n'
+      printf 'SM{"type":"steering","data":{"phase":"queued","text":"one more"}}\n'
       sleep 2
       printf 'Ax{"id":"2","type":"text","text":"slow answer"}\n'
       printf 'SM{"type":"task","data":{"in_progress":false}}\n' ;;
@@ -728,9 +729,13 @@ func TestASocketGoingAwayKeepsTheAgent(t *testing.T) {
 		t.Fatal("no turn was running, and the new socket says one is")
 	}
 	// And no age: a turn that is over has not been running for any length of time, so the field is not there
-	// at all rather than zero — the same rule `running` follows.
+	// at all rather than zero — the same rule `running` follows. Nor a queue: nothing is waiting for a task
+	// that is not running.
 	if _, stated := turn["elapsedMs"]; stated {
 		t.Fatalf("idle turn stated an age: %v", turn)
+	}
+	if _, stated := turn["queued"]; stated {
+		t.Fatalf("idle turn stated a queue: %v", turn)
 	}
 	// What was said, the call it made, what came back, and the answer — the call once, not once per frame.
 	if got, want := kindsOf(replayed), "user,tool_call,tool_result,delta"; got != want {
@@ -776,6 +781,11 @@ func TestAReloadInTheMiddleOfATurnKeepsIt(t *testing.T) {
 	// that comes back draws instead of starting at zero (#342).
 	if got := turnElapsed(turn); got < 500 {
 		t.Fatalf("the reload was told the turn had been running %dms, want about a second", got)
+	}
+	// The queue is stated with it, and this is the fact a page used to lose: the message the fake agent queued
+	// into the turn is still waiting, and the socket that just arrived is told its size (#345).
+	if got, _ := turn["queued"].(float64); got != 1 {
+		t.Fatalf("the reload was told %v messages are queued, want 1", turn["queued"])
 	}
 	// The prompt is already part of the conversation: it is not waiting for a page to be watching.
 	if got, want := kindsOf(replayed), "user"; got != want {

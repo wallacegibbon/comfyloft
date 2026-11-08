@@ -43,12 +43,29 @@ while IFS= read -r line; do
       PICTURE=1 ;;
     UX*refuse*)
       REFUSE=1 ;;
+    UX*'queue'*)
+      QUEUE=1 ;;
     UE)
       if [ -n "$REFUSE" ]; then
         # A message the agent will not take: an error and no task at all — not even the task-start frame, so
         # nothing about this message is ever a turn.
         REFUSE=""
         printf 'SM{"type":"error","data":{"text":"the task could not start"}}\n'
+        continue
+      fi
+      if [ -n "$QUEUE" ]; then
+        # One message taken into the steering queue and then the batch going in: the agent states each phase and
+        # never the size, and the pauses are what let a test see the size while it stands.
+        QUEUE=""
+        printf 'SM{"type":"task","data":{"in_progress":true,"current_step":1}}\n'
+        sleep 1
+        printf 'SM{"type":"steering","data":{"phase":"queued","text":"one"}}\n'
+        sleep 1
+        printf 'SM{"type":"steering","data":{"phase":"queued","text":"two"}}\n'
+        sleep 1
+        printf 'SM{"type":"steering","data":{"phase":"delivered"}}\n'
+        printf 'Ax{"id":"2","type":"text","text":"the queue"}\n'
+        printf 'SM{"type":"task","data":{"in_progress":false,"context_tokens":3}}\n'
         continue
       fi
       if [ -n "$PICTURE" ]; then
@@ -232,6 +249,41 @@ func TestAMessageTheAgentRefusesIsNoTurn(t *testing.T) {
 	if running, _ := fs.session.Turn(); running {
 		t.Fatal("a message the agent refused was recorded as a turn, and no frame will ever end it")
 	}
+}
+
+// TestTheQueueIsCountedOnceAndStated: the agent says when it takes a message into the steering queue and when the
+// batch goes in, and it never says how many are there. The session counts the announcements and states the size
+// with every phase and on the connect frame, so a page that comes back joins the number instead of counting from
+// nothing — which is what a tally kept by the page did, and lost on every reload (#345).
+func TestTheQueueIsCountedOnceAndStated(t *testing.T) {
+	fs := openFakeSession(t)
+	if err := fs.session.Send(Request{Prompt: "queue please"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	first := fs.watcher.waitFor(t, "the first queued message", func(event Event) bool { return event.Type == "steering" && event.Phase == "queued" })
+	if first.Queued != 1 {
+		t.Fatalf("the first queued event stated a queue of %d, want 1", first.Queued)
+	}
+	if got := fs.session.Queued(); got != 1 {
+		t.Fatalf("the session holds a queue of %d, want 1", got)
+	}
+
+	second := fs.watcher.waitFor(t, "the second queued message", func(event Event) bool { return event.Type == "steering" && event.Queued == 2 })
+	if second.Phase != "queued" {
+		t.Fatalf("second event = %+v, want the second queued message", second)
+	}
+	if got := fs.session.Queued(); got != 2 {
+		t.Fatalf("the session holds a queue of %d, want 2", got)
+	}
+
+	delivered := fs.watcher.waitFor(t, "the batch going in", func(event Event) bool { return event.Type == "steering" && event.Phase == "delivered" })
+	if delivered.Queued != 0 {
+		t.Fatalf("the delivered event stated a queue of %d, want none", delivered.Queued)
+	}
+	if got := fs.session.Queued(); got != 0 {
+		t.Fatalf("the session holds a queue of %d after delivery, want none", got)
+	}
+	fs.watcher.waitFor(t, "the end of the turn", func(event Event) bool { return event.Type == "done" })
 }
 
 // TestAWhitespaceOnlyMessageIsNoTurn: a message of spaces is no content item, so nothing is written and no task

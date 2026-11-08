@@ -193,7 +193,7 @@ func (s *Server) handleAgentSocket(ctx *httpx.Ctx) error {
 	// outlives this socket, so the answer is not "no" by construction — and the age of the turn is the one
 	// thing a page that comes back cannot count for itself (docs/decisions.md #342).
 	running, elapsed := session.Turn()
-	if err := send(agent.Event{Type: "turn", Running: running, ElapsedMs: elapsed.Milliseconds()}); err != nil {
+	if err := send(agent.Event{Type: "turn", Running: running, ElapsedMs: elapsed.Milliseconds(), Queued: session.Queued()}); err != nil {
 		return nil
 	}
 	// Then what this conversation is owed: runs it asked about that ended while nobody could be told
