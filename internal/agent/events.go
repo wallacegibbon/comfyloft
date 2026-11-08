@@ -15,9 +15,6 @@ type Event struct {
 	// delta, reasoning(delta), done
 	Text string `json:"text,omitempty"`
 
-	// done
-	ElapsedMs int64 `json:"elapsedMs,omitempty"`
-
 	// usage: the agent's own telemetry for the task it is running — SM `task`'s `context_tokens`,
 	// `step_tps` and `ttft_ms`: how full the context is, and how fast the last step went, latency
 	// included. Relayed as the agent restates it, never computed here, because the numbers are a
@@ -48,6 +45,16 @@ type Event struct {
 	// Always stated, never omitted, for the reason `serialToolCalls` is: an absent field would read as
 	// "not running", and a false answer is not the same thing as no answer.
 	Running bool `json:"running"`
+
+	// turn: how long the turn in flight had been running when this frame was written — the one thing a page
+	// that joins a turn it did not start is missing, and what makes a reload continue the count instead of
+	// restarting it (#342).
+	//
+	// A duration and not the instant it began, on purpose: the page and the session can be two machines, and
+	// a turn on a clock that differs from the page's by two minutes is still exactly as long as it is. Absent
+	// means "just began", which is the truth for a turn whose only news is this frame, and what a page counts
+	// forward from — so the field needs no `running`-style always-stated rule.
+	ElapsedMs int64 `json:"elapsedMs,omitempty"`
 
 	// steering: `queued` when a message sent into a running task was taken into the queue, `delivered`
 	// when the agent has worked it into the conversation.

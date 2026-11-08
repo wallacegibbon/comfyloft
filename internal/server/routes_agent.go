@@ -188,10 +188,12 @@ func (s *Server) handleAgentSocket(ctx *httpx.Ctx) error {
 	if err := send(agent.Event{Type: "history", History: connected.History}); err != nil {
 		return nil
 	}
-	// Then whether a turn is running, which the transcript cannot say: a replayed conversation is all
-	// finished messages, and so is a turn that has not produced its first one. The agent outlives this
-	// socket, so the answer is not "no" by construction.
-	if err := send(agent.Event{Type: "turn", Running: session.Busy()}); err != nil {
+	// Then whether a turn is running, and for how long, which the transcript cannot say: a replayed
+	// conversation is all finished messages, and so is a turn that has not produced its first one. The agent
+	// outlives this socket, so the answer is not "no" by construction — and the age of the turn is the one
+	// thing a page that comes back cannot count for itself (docs/decisions.md #342).
+	running, elapsed := session.Turn()
+	if err := send(agent.Event{Type: "turn", Running: running, ElapsedMs: elapsed.Milliseconds()}); err != nil {
 		return nil
 	}
 	// Then what this conversation is owed: runs it asked about that ended while nobody could be told

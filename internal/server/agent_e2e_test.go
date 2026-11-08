@@ -173,10 +173,9 @@ func openSocket(t *testing.T, server *httptest.Server, session string) *comfy.WS
 	return conn
 }
 
-// connect is openSocket that keeps what it read: the conversation the session is holding, and whether a
-// turn is in flight. Three messages, in this order, every time — a page draws itself from them and asks
-// nothing else.
-func connect(t *testing.T, server *httptest.Server, session string) (*comfy.WSConn, []any, bool) {
+// connect is openSocket that keeps what it read: the conversation the session is holding, and the state of the
+// turn. Three messages, in this order, every time — a page draws itself from them and asks nothing else.
+func connect(t *testing.T, server *httptest.Server, session string) (*comfy.WSConn, []any, map[string]any) {
 	t.Helper()
 	conn, err := comfy.DialWS(context.Background(), socketURL(server, session))
 	if err != nil {
@@ -190,14 +189,26 @@ func connect(t *testing.T, server *httptest.Server, session string) (*comfy.WSCo
 	if history["type"] != "history" {
 		t.Fatalf("second message = %v, want the replayed history", history)
 	}
-	// Then whether a turn is in flight, which a page cannot tell from the transcript.
+	// Then whether a turn is in flight and how long it has been running, which a page cannot tell from the
+	// transcript.
 	turn := nextEvent(t, conn)
 	if turn["type"] != "turn" {
 		t.Fatalf("third message = %v, want the state of the turn", turn)
 	}
 	replayed, _ := history["history"].([]any)
+	return conn, replayed, turn
+}
+
+// turnRunning is the `turn` frame's answer to "is a turn in flight".
+func turnRunning(turn map[string]any) bool {
 	running, _ := turn["running"].(bool)
-	return conn, replayed, running
+	return running
+}
+
+// turnElapsed is how long the turn had been running when the session stated it, in milliseconds.
+func turnElapsed(turn map[string]any) int64 {
+	elapsed, _ := turn["elapsedMs"].(float64)
+	return int64(elapsed)
 }
 
 // kindsOf is the types of a replayed conversation, in order: what a page would draw it from.
@@ -710,11 +721,16 @@ func TestASocketGoingAwayKeepsTheAgent(t *testing.T) {
 	}
 
 	// The next connection: the conversation it left, relayed as the events a live turn sends.
-	next, replayed, running := connect(t, server, session)
+	next, replayed, turn := connect(t, server, session)
 	defer next.Close()
 	t.Cleanup(func() { _ = next.Close() })
-	if running {
+	if turnRunning(turn) {
 		t.Fatal("no turn was running, and the new socket says one is")
+	}
+	// And no age: a turn that is over has not been running for any length of time, so the field is not there
+	// at all rather than zero — the same rule `running` follows.
+	if _, stated := turn["elapsedMs"]; stated {
+		t.Fatalf("idle turn stated an age: %v", turn)
 	}
 	// What was said, the call it made, what came back, and the answer — the call once, not once per frame.
 	if got, want := kindsOf(replayed), "user,tool_call,tool_result,delta"; got != want {
@@ -746,14 +762,20 @@ func TestAReloadInTheMiddleOfATurnKeepsIt(t *testing.T) {
 
 	// The fake agent takes two seconds over this one, which is the window the reload has to fit in.
 	send(t, conn, map[string]any{"prompt": "answer slowly"})
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	_ = conn.Close()
 
-	next, replayed, running := connect(t, server, session)
+	next, replayed, turn := connect(t, server, session)
 	defer next.Close()
 	t.Cleanup(func() { _ = next.Close() })
-	if !running {
+	if !turnRunning(turn) {
 		t.Fatal("the new socket was told the agent is idle while a turn was running")
+	}
+	// And how long it has been running, which this socket has not been around to count: it was opened a
+	// moment ago, and the turn was opened a second ago. That number is the session's, and it is what a page
+	// that comes back draws instead of starting at zero (#342).
+	if got := turnElapsed(turn); got < 500 {
+		t.Fatalf("the reload was told the turn had been running %dms, want about a second", got)
 	}
 	// The prompt is already part of the conversation: it is not waiting for a page to be watching.
 	if got, want := kindsOf(replayed), "user"; got != want {

@@ -137,7 +137,7 @@ export function textOf(message: TranscriptMessage): string {
  * It asks `busy` rather than the transcript because the send is the event. Between the message going out and
  * the first frame coming back — the model's first token, or the call it opens with — nothing has arrived, and
  * a line that waited for a frame was absent for exactly the stretch a reader has nothing else to go on. The
- * panel sets `busy` where the socket takes the message and clears it when the turn ends, so there is one
+ * panel records a turn where the socket takes the message and drops it when the turn ends, so there is one
  * word for "a turn is running" and this reads it.
  *
  * An answer that has already said something does not need it: the words are the sign of life, and they are
@@ -149,6 +149,19 @@ export function agentIsWorking(messages: TranscriptMessage[], busy: boolean): bo
     const last = messages[messages.length - 1];
     if (last?.streaming && textOf(last)) return false;
     return true;
+}
+
+/**
+ * When the turn in flight began, as this page's clock reads it.
+ *
+ * `elapsedMs` is how long the turn had already been running when the session said so — the `turn` frame it
+ * sends on every connection — and `now` is the instant that frame was read. The subtraction is what makes a
+ * reload continue the count instead of restarting it (#342): the start belongs to the turn, and while the page
+ * was away the session was the only side holding it. A negative age is read as no age, so a start is never in
+ * the future and a count never runs backwards.
+ */
+export function turnStartedAt(elapsedMs: number | undefined, now: number): number {
+    return now - Math.max(0, elapsedMs ?? 0);
 }
 
 /**

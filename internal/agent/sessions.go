@@ -62,11 +62,17 @@ type Session struct {
 	// sink on its way out.
 	watchGeneration uint64
 
-	// busy says a turn is in flight: a prompt went in and its `done` has not come back. It is a fact
-	// about the conversation, not about one connection, so it has a lock of its own — a second tab
-	// asking, and the delete route refusing, both read it.
-	busyMu sync.Mutex
-	busy   bool
+	// busy says a turn is in flight, in the agent's own words: it announced a task as running and has not
+	// announced that it is over. `started` is when it said so. It is a fact about the conversation, not about
+	// one connection, so it has a lock of its own — a second tab asking, and the delete route refusing, both
+	// read it.
+	//
+	// The instant lives beside the flag rather than in the page because the page is the thing that goes away:
+	// a turn outlives the socket that started it, and a `turn` frame that says nothing about how long it has
+	// been running is a wait a reload restarts at zero (#342).
+	busyMu  sync.Mutex
+	busy    bool
+	started time.Time
 
 	// pending is the tool calls waiting for the canvas to answer them, by the id the server gave them,
 	// and calls counts the ones asked so far. A tool call is a question only the page can answer, so it
@@ -464,16 +470,21 @@ func (s *Session) pump() {
 		// state) does not fill the log.
 		s.stateMu.Lock()
 		before := s.state.destination()
-		ended := turnStep(&s.state, frame, true, s.publish)
+		change := turnStep(&s.state, frame, s.publish)
 		after := s.state.destination()
 		s.stateMu.Unlock()
 		if after != before {
 			s.Log.Info("agent: session=%s %s", s.ID, destinationLine(after))
 		}
-		if ended {
+		switch change {
+		case turnBegan:
+			// The agent's task start, which is where the turn begins for this side too: a message that was
+			// refused never gets here, and a command's task gets here without a message of ours (#342).
+			s.beginTurn()
+		case turnEnded:
 			// Cleared before the `done` leaves, so a caller that acts on the end of a turn — the panel
 			// reopening its session, the delete route deciding — sees an idle agent.
-			s.setBusy(false)
+			s.endTurn()
 			s.publish(Event{Type: "done"})
 		}
 	}
@@ -482,31 +493,55 @@ func (s *Session) pump() {
 // Send writes one message into the process. Writing is what a connection does when the user types; the
 // answer arrives through the watcher, not here.
 //
-// A prompt is a turn, and a turn ends at the agent's `done` — the one place this flag is cleared. A
-// command is not: it answers with its own `CO` and the session is as idle afterwards as it was before.
+// A message is content items and a flush, whatever the items are — `UX` carries text or a picture and `UE`
+// sends it (`wire.go`) — and whether it becomes a turn is the agent's answer, not this side's guess: an
+// accepted message gets a task-start frame before the work and a task-end frame after it, and a refused one
+// gets neither (see `turnChange`). So nothing here records a turn; the frames do.
 func (s *Session) Send(req Request) error {
 	s.write.Lock()
 	defer s.write.Unlock()
-	if err := writeRequest(s.proc, req); err != nil {
-		return err
-	}
-	if req.Prompt != "" {
-		s.setBusy(true)
-	}
-	return nil
+	return writeRequest(s.proc, req)
 }
 
 // Busy reports whether a turn is in flight.
 func (s *Session) Busy() bool {
-	s.busyMu.Lock()
-	defer s.busyMu.Unlock()
-	return s.busy
+	running, _ := s.Turn()
+	return running
 }
 
-func (s *Session) setBusy(busy bool) {
+// Turn reports whether a turn is in flight and how long it has been running, as one answer: two reads taken
+// separately could straddle the turn ending, and a page told "running" with the age of no turn is worse than
+// being told nothing (#342).
+func (s *Session) Turn() (running bool, elapsed time.Duration) {
 	s.busyMu.Lock()
-	s.busy = busy
-	s.busyMu.Unlock()
+	defer s.busyMu.Unlock()
+	if !s.busy {
+		return false, 0
+	}
+	return true, time.Since(s.started)
+}
+
+// beginTurn records the task the agent has just announced as running. The clock is the turn's, not the
+// message's: the agent restates its task at every step boundary, and a message queued into a running task does
+// not start a second one, so the first announcement is the one the age is measured from. A fresh start only
+// happens when the agent said the previous task was over.
+func (s *Session) beginTurn() {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	if s.busy {
+		return
+	}
+	s.busy = true
+	s.started = time.Now()
+}
+
+// endTurn is the task the agent announced as running being over. The flag and the instant it started are one
+// fact and are cleared together, so no reader can find a running turn with no start.
+func (s *Session) endTurn() {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	s.busy = false
+	s.started = time.Time{}
 }
 
 // Cancel asks the agent to wind its current task down. A turn is the agent's to finish, so this is a

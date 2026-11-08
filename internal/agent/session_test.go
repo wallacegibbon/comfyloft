@@ -38,7 +38,30 @@ while IFS= read -r line; do
     CI*'"name":"reasoning_level_set"'*)
       printf 'SM{"type":"reasoning_level","data":{"level":2}}\n'
       printf 'CO{"command_id":"1","result":{"level":2}}\n' ;;
+    UX*'"type":"image"'*)
+      # A picture with no words is still a user message: the items are staged, and UE sends them.
+      PICTURE=1 ;;
+    UX*refuse*)
+      REFUSE=1 ;;
     UE)
+      if [ -n "$REFUSE" ]; then
+        # A message the agent will not take: an error and no task at all — not even the task-start frame, so
+        # nothing about this message is ever a turn.
+        REFUSE=""
+        printf 'SM{"type":"error","data":{"text":"the task could not start"}}\n'
+        continue
+      fi
+      if [ -n "$PICTURE" ]; then
+        # The real agent announces the task before the work starts (beginTask) and announces its end when the
+        # task returns (handleTaskDone). The pause between the two is the model looking at the picture, and it
+        # is what lets a test see the turn while it is running.
+        PICTURE=""
+        printf 'SM{"type":"task","data":{"in_progress":true,"current_step":1}}\n'
+        printf 'Ax{"id":"2","type":"text","text":"a picture"}\n'
+        sleep 1
+        printf 'SM{"type":"task","data":{"in_progress":false,"context_tokens":3}}\n'
+        continue
+      fi
       printf 'SM{"type":"task","data":{"in_progress":true,"current_step":1,"context_tokens":0}}\n'
       printf 'Ax{"id":"2","type":"text","text":"hello "}\n'
       printf 'SM{"type":"task","data":{"in_progress":true,"current_step":1,"context_tokens":5,"step_tps":12.5,"ttft_ms":1200}}\n'
@@ -157,6 +180,73 @@ func TestSessionStreamsTheAnswerAndKeepsKeysHome(t *testing.T) {
 	encoded, _ := json.Marshal(watcher.all())
 	if strings.Contains(string(encoded), "secret-key") || strings.Contains(string(encoded), "127.0.0.1:1") {
 		t.Errorf("the agent's credentials reached the events: %s", encoded)
+	}
+}
+
+// TestAnImageOnlyMessageIsATurn: a message is content items and a flush, whatever the items are — `UX` carries
+// text or a picture, `UE` sends the message (`wire.go`) — and a picture with no words is a message the agent
+// takes like any other: it announces the task, works, and announces the end. The session reads those two frames
+// (#342), which is why a page that connects while the model is looking at the picture is told the agent is
+// running instead of idle — and why the delete route refuses to cancel it.
+func TestAnImageOnlyMessageIsATurn(t *testing.T) {
+	fs := openFakeSession(t)
+	if err := fs.session.Send(Request{Images: []string{"data:image/png;base64,cGljdHVyZQ=="}}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	// The task-start frame comes before the answer and the task-end frame comes after it, so the first word is
+	// the middle of a turn that the session already knows is running.
+	fs.watcher.waitFor(t, "the first word of the answer", func(event Event) bool { return event.Type == "delta" })
+	if running, _ := fs.session.Turn(); !running {
+		t.Fatal("a message carrying a picture left the session idle while the agent was working on it")
+	}
+
+	fs.watcher.waitFor(t, "the end of the turn", func(event Event) bool { return event.Type == "done" })
+	if running, _ := fs.session.Turn(); running {
+		t.Fatal("the turn the picture opened never ended")
+	}
+
+	// What went out: the picture, and the flush that makes it one message.
+	frames, err := os.ReadFile(fs.log)
+	if err != nil {
+		t.Fatalf("read frames: %v", err)
+	}
+	if !strings.Contains(string(frames), `"type":"image"`) {
+		t.Errorf("stdin frames = %q, want the picture", string(frames))
+	}
+	if !strings.HasSuffix(string(frames), "UE\n") {
+		t.Errorf("the picture was not flushed with UE: %q", string(frames))
+	}
+}
+
+// TestAMessageTheAgentRefusesIsNoTurn: the agent answers a message it will not take with an error and no task
+// at all — no task-start frame, so nothing running and nothing to end (#342). Reading the turn off the frames
+// is what makes this true; a session that recorded a turn because it had written a prompt would answer "busy"
+// for the life of the process, showing a working panel over a conversation nobody is working on and refusing
+// to clear it (#187).
+func TestAMessageTheAgentRefusesIsNoTurn(t *testing.T) {
+	fs := openFakeSession(t)
+	if err := fs.session.Send(Request{Prompt: "refuse this one"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	fs.watcher.waitFor(t, "the agent's refusal", func(event Event) bool { return event.Type == "error" })
+	if running, _ := fs.session.Turn(); running {
+		t.Fatal("a message the agent refused was recorded as a turn, and no frame will ever end it")
+	}
+}
+
+// TestAWhitespaceOnlyMessageIsNoTurn: a message of spaces is no content item, so nothing is written and no task
+// is announced — and the session says idle, which is the truth. It is the same fact as the two tests above seen
+// from the other side: the turn is what the agent announces, not what a caller meant to send.
+func TestAWhitespaceOnlyMessageIsNoTurn(t *testing.T) {
+	fs := openFakeSession(t)
+	if err := fs.session.Send(Request{Prompt: "   "}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if running, _ := fs.session.Turn(); running {
+		t.Fatal("a message of spaces was recorded as a turn, and nothing will ever end it")
+	}
+	if frames, err := os.ReadFile(fs.log); err == nil && strings.Contains(string(frames), "UX") {
+		t.Errorf("a message of spaces wrote frames: %q", string(frames))
 	}
 }
 

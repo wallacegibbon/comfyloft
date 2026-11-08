@@ -54,6 +54,9 @@ export type AgentModel = {
 export type AgentEvent = {
     type: "models" | "user" | "steering" | "delta" | "reasoning" | "model" | "reasoning_level" | "command" | "tool_call" | "tool_result" | "notice" | "usage" | "tool" | "history" | "turn" | "done" | "error" | "closed";
     text?: string;
+    /** `turn`: how long the turn in flight had been running when the frame was written — a duration, not the
+     *  instant it began, because the page and the session can be two machines with two clocks. Absent means
+     *  "just began", which is what a page counts forward from (`turnStartedAt`). */
     elapsedMs?: number;
     models?: AgentModel[];
     active?: AgentModel;

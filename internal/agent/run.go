@@ -80,9 +80,24 @@ func splitForPrompt(prompt string) []string {
 	return []string{prompt}
 }
 
-// turnStep applies one frame and reports whether it ended the turn. It is the whole of what reading an
-// agent means: a frame is a frame, whatever asked for it.
-func turnStep(state *startup, frame *Frame, hasPrompt bool, emit func(Event)) (ended bool) {
+// turnChange is what one frame did to the turn in flight.
+//
+// A turn is the agent's, and so are its two ends: `beginTask` broadcasts the task as running before the work
+// starts, and `handleTaskDone` broadcasts it as over when the task goroutine returns — for every task, an error
+// included. That is why this side reads the turn off these frames instead of assuming one from what it wrote: a
+// message the agent refuses never becomes a task at all, and a command (`:continue`) starts one this side never
+// asked for (#342).
+type turnChange int
+
+const (
+	turnUnchanged turnChange = iota
+	turnBegan
+	turnEnded
+)
+
+// turnStep applies one frame and reports what it did to the turn — where it began, where it ended, or nothing.
+// It is the whole of what reading an agent means: a frame is a frame, whatever asked for it.
+func turnStep(state *startup, frame *Frame, emit func(Event)) turnChange {
 	switch frame.Tag {
 	case TagUserX:
 		// The agent echoing what the canvas sent. A user message comes from here and nowhere else, so
@@ -93,7 +108,7 @@ func turnStep(state *startup, frame *Frame, hasPrompt bool, emit func(Event)) (e
 	case TagAssistantXDelta:
 		kind, text, ok := contentDelta(frame.Value)
 		if !ok {
-			return false
+			return turnUnchanged
 		}
 		switch kind {
 		case "text":
@@ -112,16 +127,17 @@ func turnStep(state *startup, frame *Frame, hasPrompt bool, emit func(Event)) (e
 			emit(event)
 		}
 	case TagCmdOutput:
+		// A command's answer. A command is not a turn — `:continue` answers its `CO` and *then* runs a task,
+		// which announces itself — so this changes nothing here.
 		id, ok, message := commandOutput(frame.Value)
 		if id != commandID {
-			return false
+			return turnUnchanged
 		}
 		emit(Event{Type: "command", OK: ok, Message: message})
-		return !hasPrompt
 	case TagSystemMsg:
 		kind, data, ok := systemMessage(frame.Value)
 		if !ok {
-			return false
+			return turnUnchanged
 		}
 		switch kind {
 		case "model", "reasoning_level":
@@ -135,18 +151,24 @@ func turnStep(state *startup, frame *Frame, hasPrompt bool, emit func(Event)) (e
 			state.collect(kind, data)
 			emit(state.event())
 		case "task":
-			// The agent's own account of the step it is running: how full the context is and how fast the
-			// last one went. Relayed before the end of the turn is decided, because the frame that ends it
-			// carries the final count and nothing is said afterwards.
+			// The agent's own account of the task: how full the context is and how fast the last step went,
+			// and whether it is running. The two are one frame, so the numbers are relayed before the end of
+			// the turn is read off them — the frame that ends it carries the final count and nothing is said
+			// afterwards.
 			if reported, ok := taskUsage(data); ok {
 				emit(reported.event())
 			}
-			if over, known := taskInProgress(data); known && over && hasPrompt {
-				return true
+			if over, known := taskInProgress(data); known {
+				if over {
+					return turnEnded
+				}
+				return turnBegan
 			}
 		case "session":
+			// The process is closing: whatever task it had is not coming back, and the session's own end
+			// releases the agent rather than leaving it "running" for the next page that asks.
 			if sessionState(data) == "closed" {
-				return true
+				return turnEnded
 			}
 		case "steering":
 			// A message sent while the agent was working: it says when it queued it and when it used it.
@@ -164,12 +186,14 @@ func turnStep(state *startup, frame *Frame, hasPrompt bool, emit func(Event)) (e
 				emit(Event{Type: "notice", Text: text})
 			}
 		case "error":
+			// A message the agent could not take (a malformed frame, a task it could not start) is an error
+			// and no task: there is nothing running to end, which is why this does not touch the turn.
 			emit(systemError(data))
 		default:
 			state.collect(kind, data)
 		}
 	}
-	return false
+	return turnUnchanged
 }
 
 // commandID tags the command this request carries, so its CO is told apart from anything else.

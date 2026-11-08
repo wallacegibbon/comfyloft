@@ -695,7 +695,7 @@ export default {
             close: "关闭",
             working: "处理中… {{seconds}} 秒",
             workingQueued: "处理中… {{seconds}} 秒（{{count}} 条消息已排队,会在当前步骤之后一起插入）",
-            workingHint: "消息已经发出，agent 还没有报告任何东西。这里的秒数是本机数的。如果看着像卡死了，用下面的按钮停掉它。",
+            workingHint: "消息已经发出，agent 还没有报告任何东西。这里的秒数是这一轮已经运行了多久——起点在服务端，刷新之后接着数。如果看着像卡死了，用下面的按钮停掉它。",
             steeringQueued: "{{count}} 条消息已排队,会在当前步骤之后一起插入",
             earlierMessages: "更早的 {{count}} 条消息",
             stopQueuedTitle: "停止这个回合?",

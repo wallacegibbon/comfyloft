@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { referenceBlock, referenceLine } from "@/lib/canvas/agent-references";
-import { agentIsWorking, agentRunState, resumeTurn, transcriptEvent, transcriptWindow, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
+import { agentIsWorking, agentRunState, resumeTurn, transcriptEvent, transcriptWindow, turnStartedAt, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
 import type { AgentEvent } from "@/services/api/agent";
 
 /**
@@ -231,6 +231,35 @@ describe("the one line the running turn is drawn as", () => {
 
     it("draws nothing for a turn that is not running and a queue that is empty", () => {
         expect(agentRunState(false, 0)).toBe("idle");
+    });
+});
+
+/**
+ * Where the seconds above start.
+ *
+ * The number used to be counted from the moment the row appeared, which is the page's own lifetime and not the
+ * turn's: a reload mid-turn showed `Working… 0s` again for a turn that had been silent for a minute — in exactly
+ * the case the number exists for, telling a thinking agent from a hung one (#342). The session states how old the
+ * turn is on every connection, so the start survives what the page cannot.
+ */
+describe("the instant the running turn began", () => {
+    it("is the session's age subtracted from this page's clock, so a reload continues the count", () => {
+        // The frame says the turn had been running twelve seconds when it arrived; a page that joins it shows
+        // twelve and keeps going from there, not zero.
+        const now = 100_000;
+        expect(Math.floor((now - turnStartedAt(12_000, now)) / 1000)).toBe(12);
+    });
+
+    it("is now for a turn that has just begun, absent field and all", () => {
+        // `elapsedMs` is omitted when it is zero — a turn this frame is the first news of — and an older
+        // session does not send it at all. Both mean "count from here".
+        expect(turnStartedAt(0, 5_000)).toBe(5_000);
+        expect(turnStartedAt(undefined, 5_000)).toBe(5_000);
+    });
+
+    it("never lands in the future, whatever a bad frame says about the age", () => {
+        // A start after `now` would make the count wait before it began; an age below zero is no age.
+        expect(turnStartedAt(-4_000, 5_000)).toBe(5_000);
     });
 });
 

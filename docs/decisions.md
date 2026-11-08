@@ -9523,6 +9523,12 @@ from an answer that has arrived. It sits at the end of the transcript instead of
 carries the seconds counted since the send: `Working… 12s`. The condition is `agentIsWorking(messages, busy)` in
 `lib/canvas/agent-transcript.ts`: a turn is running and the answer being written has no text yet.
 
+**Amended by #342** The seconds are the turn's, and where they start is the agent's, held by the session: the task
+frame that opens a turn states it, and a reload continues the count instead of restarting it. Where this entry says
+"counted since the send" read "since the turn began", and where it says this side is "the only side that can count
+them" read "the only side that can keep the start" — the page still ticks, but it is told where to start, and a
+message queued into a running turn no longer restarts the number.
+
 **Why** Between the message going out and the first frame coming back there is nothing on screen. The model's first
 token, and the tool call that often opens a turn, take seconds to minutes, and the panel looked idle for all of it:
 `busy` was true, the stop button was there, and nothing on screen told a thinking agent from a hung one. The row
@@ -11618,3 +11624,89 @@ entry (RIFE on a silent clip) was re-checked against `workflows/video-rife.json`
 
 **Where** `docs/decisions.md`, `docs/known-issues.md`, `frontend/scripts/check-decisions.cjs` (it now reads the
 record too), `frontend/package.json` (`check:decisions` in `check`).
+
+## 342. The wait is the turn's, and the agent is the one who says it began
+
+**Decision** `Working… Ns` counts the turn in flight, and a turn is what the agent says it is. AlayaCore
+broadcasts the task as running in `beginTask`, before the work starts, and as over in `handleTaskDone`, when the
+task goroutine has returned; `turnStep` now reports which of the two a frame was — `turnBegan`, `turnEnded`, or
+neither — and the pump records or clears the turn in wire order. The session holds `busy` beside the instant the
+turn began, one guarded pair, and `Send` records nothing: what the agent accepts is a turn, what it refuses never
+becomes one. The `turn` frame on connect states `running` with `elapsedMs`, the age of the turn when the frame was
+written. The panel reads that into an instant on its own clock (`turnStartedAt(elapsedMs, now)`), sets the instant
+where a turn begins for it — the send — and where it joins one — the frame — and derives the number from it once a
+second. The flag and the instant are one piece of state (`turn: {startedAt} | null`), and an error the agent answers
+a message with clears it, because a message it could not take never becomes a task. **Amends #289.**
+
+**Why** The row exists to tell an agent that is thinking from a panel that is hung (#289), and the number in it was
+the one thing on the panel that a reload destroyed: the interval took `Date.now()` when the row appeared, so a page
+reopened three minutes into a silent turn showed `Working… 0s` — the exact state the number is there to rule out,
+with its evidence erased. The window is not a corner case: `agentIsWorking` asks about *text*, so a turn that is only
+reasoning keeps the row for as long as the model thinks, which is the longest silence a turn has. Nor can the page
+remember the start itself: the turn belongs to the session, outlives the socket that started it, and is already the
+subject of the `turn` frame — so a refresh, a second tab, a panel closed and reopened, and a reader on another
+machine are one case and not four.
+
+#289's premise was narrower than it read. The agent's `ttft_ms` does arrive with the step that *ends* the wait, so
+the agent cannot supply a count that is still running; but the session wrote the prompt and is still there
+afterwards, so "when did this turn begin" is a fact it has and the page does not. The tick stays on this side
+because that is all it is — one subtraction, re-rendering the row.
+
+**Why the session does not keep its own opinion** The `task` frame is the only thing that knows. In AlayaCore,
+`handleInputFrame` stages content items — text, a picture, a film — and `UE` sends what is staged as one message, so
+whether a message has words is not part of "is this a message"; `submitPrompt` starts a task, steers the running one,
+or refuses; `beginTask` announces the running state itself ("the frame is required, not decorative"); and
+`runTaskNormal` defers its result, so `handleTaskDone` announces the end of **every** accepted task, an error
+included. A refused message gets an `SM error` and neither frame. Two bugs lived in the gap between that and a
+session that guessed: `Send` decided "a turn" on `req.Prompt != ""` while `writeRequest` wrote on `HasPrompt`, so a
+picture with no words was written and not recorded, and a prompt of spaces was recorded with nothing written — a turn
+no frame could ever end, `busy` for the life of the process and a delete route that refuses forever. And a turn
+recorded *after* its frames were written could have the agent's `done` land before the flag it was meant to clear,
+leaving the same permanent `busy`. Both are gone because nothing is inferred: `HasPrompt` decides only what is
+written, and both ends arrive from the agent, in one goroutine, in order.
+
+**Cost** One field on a frame that already exists, one guarded pair in `Session`, one subtraction in the panel. The
+flag now follows the write by one round trip through the agent rather than being set in the same call, so a delete
+arriving between a prompt and the task-start frame is still possible — a window no bookkeeping on this side could
+close, answered by the agent, which is who the route was asking. The page's row is still the page's ("since I sent")
+until a `done`, an error or a reload, so a task started by a command — `:continue`, `:summarize` — has no row though
+the session knows it is running; that is #289's rule and it did not change. `turnStep` loses its `hasPrompt`
+parameter: the only caller always passed `true`, and a command's answer no longer ends anything. And the age travels
+as a duration rather than the instant it began, for a reason that costs the field its intuitive shape: the two sides
+can be two machines, and a turn is exactly as long on a clock that differs from the browser's by two minutes.
+
+**Rejected** Marking the turn where the prompt is written, which is what this entry did at first: it answers "is a
+turn running" with a guess, and every case the guess gets wrong — a picture with no words, a prompt of spaces, a
+refusal, a task a command started — has to be paid for separately, and was. Ticking on the server: a frame a second
+on the channel that carries the conversation, to say something the page can derive from a start it already has.
+Sending the instant the turn began instead of its age: two clocks, and `time.Since` on the session's monotonic clock
+and `performance.now()` in the page are each immune to their own machine's clock being adjusted, which a wall-clock
+instant and a subtraction across two machines are not. Remembering the start in the page (`localStorage`, the store):
+the page is what went away, and the turn may have been started by a tab that is gone.
+
+**Tested** Go: `TestAnImageOnlyMessageIsATurn` — a `UX` picture and its `UE` make a task the session sees running
+while the model is looking at it, and idle when it ends; `TestAMessageTheAgentRefusesIsNoTurn` — an `SM error` with
+no task frames leaves the session idle, which is the case a recorded turn would have left busy forever;
+`TestAWhitespaceOnlyMessageIsNoTurn` — nothing is written and nothing is a turn. `TestAReloadInTheMiddleOfATurnKeepsIt`
+and `TestASocketGoingAwayKeepsTheAgent` still state the turn from the connect frame, now off the agent's task frames,
+and `internal/agent` and `internal/server` pass in full. Frontend: `frontend/tests/agent-transcript.test.ts`
+(`turnStartedAt`: an age of twelve seconds read against this page's clock is a start twelve seconds ago and not now;
+an absent field and a zero one both mean "began here"; an age below zero is no age). In the browser, on an isolated
+server on `:8195` whose agent is a fake speaking AlayaCore's wire and answering ninety seconds late: pressing Enter
+produced `Working… 2s` in the same observation as the user's own message, and `10s` eight seconds later; three
+seconds after a reload — a page that had existed for three seconds — it read `13s`, and `17s` four seconds after
+that, so the count continued instead of restarting at zero. At `21s` a second message was sent into the running turn
+and read `24s` two seconds later, so a queued message does not restart it. And a message the fake refused showed the
+agent's error with **no row at all**, the "Clear history" button back to its idle label — the panel and the session
+agreeing that nothing is running. `go test ./internal/...`, `make check` (gofmt, vet, deadcode), `npm run check`
+(i18n, exports, decisions, prettier, `tsc`), `npx vitest run`, `npm run build` (576.91 kB). The panel's arithmetic
+has no automated test of its own — there is no DOM harness in this tree — so that wiring rests on the browser
+observation and on `turnStartedAt`'s three cases.
+
+**Where** `internal/agent/run.go` (`turnChange`, `turnStep`), `internal/agent/sessions.go` (`Send`, `beginTurn`,
+`endTurn`, `Turn`, the pump's switch), `internal/agent/events.go` (`ElapsedMs` on `turn`),
+`internal/server/routes_agent.go` (the frame), `internal/server/agent_e2e_test.go`, `internal/agent/session_test.go`
+(the fake agent's task frames and the three tests), `frontend/src/lib/canvas/agent-transcript.ts` (`turnStartedAt`),
+`frontend/src/components/canvas/canvas-agent-panel.tsx` (the `turn` state, the tick, the error branch),
+`frontend/src/services/api/agent.ts`, `frontend/src/i18n/locales/{en-US,zh-CN}.ts` (`canvas.agent.workingHint` — it
+said the seconds were counted here), `frontend/tests/agent-transcript.test.ts`.

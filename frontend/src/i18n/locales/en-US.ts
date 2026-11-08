@@ -661,7 +661,7 @@ export default {
             close: "Close",
             working: "Working… {{seconds}}s",
             workingQueued: "Working… {{seconds}}s ({{count}} queued, used together after the current step)",
-            workingHint: "The message is out and the agent has not reported anything yet. The seconds are counted here. If it looks stuck, stop it below.",
+            workingHint: "The message is out and the agent has not reported anything yet. The seconds are how long this turn has been running — the count starts on the server, so a reload picks it up where it was. If it looks stuck, stop it below.",
             steeringQueued: "{{count}} queued · used together after the current step",
             earlierMessages: "{{count}} earlier messages",
             stopQueuedTitle: "Stop this turn?",
