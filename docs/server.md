@@ -521,7 +521,15 @@ internal/util            the few helpers that are not any one package's business
 internal/server          route table and wiring
 ```
 
-Three design notes worth knowing before changing anything:
+Four design notes worth knowing before changing anything:
+
+- **The agent is relayed, not modelled.** `internal/agent` writes a user message as the wire's own content items
+  and a flush, relays the frames that come back, and keeps only what AlayaCore cannot say twice — the
+  conversation's frames, its startup broadcast, the model entries `model_sync` has to round-trip — plus the
+  routing for one socket and one tool call. It keeps no opinion about what the agent is doing: the turn in flight
+  comes off the agent's own task frame, the models off its `model_list`, a failure off its `error`. A fact this
+  side derives is a second truth that only the agent can correct, and its failures are invisible in proportion to
+  how rare they are (#343, and #342 for the turn).
 
 - **Graphs are generic JSON.** There are fourteen ComfyUI graphs beside `registry.json`, and they
   carry node classes this codebase will never model. `internal/workflow` offers typed accessors

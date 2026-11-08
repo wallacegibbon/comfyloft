@@ -250,7 +250,7 @@ change — pinned by `internal/resource/bake_test.go`.
 ## 14. The asset root is discovered, not hardcoded
 
 **Decision** `COMFYLOFT_SERVER_ROOT` → working directory → executable directory, accepting the first that
-contains `workflows/registry.json` or `resources/index.json`.
+contains `workflows/registry.json` or `resources.json`.
 
 **Why** The binary lives in `bin/`, which must not be mistaken for the asset root, and the
 gateway is also started from the repository root by `start.sh`. A bare `workflows/` directory is
@@ -362,7 +362,7 @@ canvas origin is matched by host, so the wildcard was only ever an accident wait
 
 **Decision** `workflows/registry.json` carries English `label`, `description`, `variantLabels`
 and `parameters[].label/description` — it is data the gateway serves, so it follows #8. The
-canvas translates the strings it displays, in `web/src/lib/gateway-labels.ts`, keyed by the
+canvas translates the strings it displays, in `web/src/lib/server-labels.ts`, keyed by the
 stable identifier the gateway already sends:
 
 ```ts
@@ -388,9 +388,9 @@ plain `t()` would answer in whichever language is being read, which is the one t
 dictionary (Chinese, this UI). A workflow added by hand shows English in both languages until
 someone adds the zh entries — visible, not silent.
 
-**Where** `workflows/registry.json`, `canvas/web/src/lib/gateway-labels.ts`,
-`frontend/src/i18n/locales/zh-CN.ts` (`gateway.models`, `gateway.variants`), `use-config-store.ts`
-(`modelOptionLabel`, `baseModelOptions`), `resource-center-panel.tsx` (variant list).
+**Where** `workflows/registry.json`, `frontend/src/lib/server-labels.ts`,
+`frontend/src/i18n/locales/zh-CN.ts` (`gateway.models`, `gateway.variants`), `frontend/src/stores/use-config-store.ts`
+(`modelOptionLabel`, `baseModelOptions`), `frontend/src/components/settings/resource-center-panel.tsx` (variant list).
 
 **Not translated on purpose** `parameters[].label/description` for the API and plugin consumers
 stay English only (nothing in the canvas renders them yet), `bindings.prompt.default` is model
@@ -427,7 +427,7 @@ that is the point, not a limitation to work around.
 
 **Where** `internal/config/config.go` (`boolValue`), `internal/resource/install_policy.go`,
 `internal/resource/jobs.go` (`Install`, `installHint`), `internal/resource/status.go`,
-`resource-center-panel.tsx`, `frontend/src/services/api/resources.ts`, `docs/server.md`,
+`frontend/src/components/settings/resource-center-panel.tsx`, `frontend/src/services/api/resources.ts`, `docs/server.md`,
 `.env.example`, `README.md`.
 
 ---
@@ -507,8 +507,8 @@ library that is no longer installed. `design-tokens.ts` and the `:root` / `.dark
 file headers say so.
 
 **Where** `frontend/src/lib/canvas-overlay.ts`, `design-tokens.ts`, `app-theme.ts`,
-`canvas-theme.ts`, `styles/globals.css`, `frontend/src/components/canvas/infinite-canvas.tsx`,
-`canvas-context-menu.tsx`, `canvas-size-picker.tsx`, `canvas-resource-mention-textarea.tsx`.
+`frontend/src/lib/canvas-theme.ts`, `styles/globals.css`, `frontend/src/components/canvas/infinite-canvas.tsx`,
+`frontend/src/components/canvas/canvas-context-menu.tsx`, `canvas-size-picker.tsx`, `frontend/src/components/canvas/canvas-resource-mention-textarea.tsx`.
 
 ---
 
@@ -592,49 +592,6 @@ looks like coverage.
 
 **Cost** The suite covers pure functions only — viewport focus, thumbnail choice, model selection. There are no
 component or canvas interaction tests, so overlay guards and kit primitives are still verified by hand.
-
-
-## 28. Model call scripts are gone; everything is OpenAI-compatible
-
-**Decision** `services/api/model-plugin.ts` is deleted, along with the `script` field on
-`ChannelModel`, `resolveModelScript()`, the eight per-capability templates, the LLM authoring
-prompt, the full-screen CodeMirror editor, and the `modelPlugin` / `config.scriptEditor` /
-`apiErrors.script*` copy. The client no longer evaluates user-authored JavaScript to perform a
-model call.
-
-**What it was** An escape hatch for providers whose request shape matched nothing the app knew.
-You wrote an async function body; the app injected `prompt`, `images`, `params`, `model`,
-`baseUrl`, `apiKey`, `http`, `request`, `poll`, `sleep`, `signal`, `onDelta`, and your code did
-the HTTP itself. An empty script meant "use the built-in OpenAI-compatible call", so it was an
-override, never a requirement.
-
-**Why it could not fire** Nothing could set a script. The editor's open button was rendered under
-`!LOCAL_ONLY`; the local gateway sync maps `name`, `capability`, `label`, `workflowId`,
-`baseModel`, `imageInputs`, `variantModes`, `variantLabels` — never `script`. So
-`resolveModelScript()` returned `""` on every code path, and all five `if (script)` branches
-(image ×3, video, audio) were unreachable. Only a localStorage blob saved by an older cloud build
-could have carried one.
-
-**Why not keep it** Three reasons, in order of weight. First, it contradicts the project's core
-invariant: the gateway exists to present every ComfyUI workflow as an OpenAI-compatible model, so
-the canvas "only changes its base URL" (README). A client-side override is a hole in that
-guarantee. Second, unreachable code is untested code — including five branches nobody had run and
-an editor nobody could open. Third, it was a `new Function()` evaluation surface shipped in the
-bundle for zero reachable benefit.
-
-**Cost** A provider needing a bespoke request shape must now be adapted in the Go gateway. If
-client-side scripting is ever wanted again it has to come back deliberately, with an authoring UI
-and tests; `git log` keeps the deleted version.
-
-**Result** 991 + 184 lines removed plus the branch bodies; `src` is 145 modules / 29,620 lines →
-144 modules / 28,377 lines. Vendor chunk unchanged (571 kB) because the runtime was tree-shaken
-out of reachable paths already; the win is comprehensibility, not bytes.
-
-**Where** `services/api/model-plugin.ts`, `frontend/src/services/api/image.ts`, `video.ts`, `audio.ts`,
-`frontend/src/stores/use-config-store.ts`, `components/layout/channel-editor-drawer.tsx`,
-`i18n/locales/{zh-CN,en-US}.ts`.
-
----
 
 
 ## 29. Dialogs are a kit primitive too; no antd `Modal` is left
@@ -757,9 +714,9 @@ class name at all.
 first bytes this migration has actually returned, because `Select` was the last component pulled in
 from outside the `Button`/`Modal`/`Tooltip` subtree that the remaining components drag along.
 
-**Where** `frontend/src/components/kit/select.tsx`, `components/kit/tag-input.tsx`, `styles/globals.css`, and the
-four call sites (`pages/assets/index.tsx`, `frontend/src/components/canvas/canvas-side-panel.tsx`,
-`frontend/src/components/canvas/canvas-node-super-resolve-dialog.tsx`, `components/layout/app-config-modal.tsx`).
+**Where** `frontend/src/components/kit/select.tsx`, `frontend/src/components/kit/select.tsx`, `styles/globals.css`, and the
+four call sites (`frontend/src/pages/not-found/index.tsx`, `frontend/src/components/canvas/canvas-side-panel.tsx`,
+`frontend/src/components/canvas/canvas-tool-node-panel.tsx`, `components/layout/app-config-modal.tsx`).
 
 ---
 
@@ -833,7 +790,7 @@ what the dialog does.
 ## 35. What the dependency audit removed, and what it kept against its own rule
 
 **Removed** `@uiw/react-codemirror`, `@codemirror/lang-javascript`, `@codemirror/lang-json` (the
-model script editor that used them was deleted in #28), `@tanstack/react-query` (only the provider
+model script editor that used them, which went with the scripts), `@tanstack/react-query` (only the provider
 was rendered; no `useQuery` anywhere, so the client was a cache that always stayed empty),
 `class-variance-authority` (no `cva()`), `react-router` (redundant — `react-router-dom` 7 declares
 it as a regular dependency), and `streamdown` (a markdown renderer whose components were never
@@ -933,7 +890,7 @@ yet, but once it stops being exported it may be, and the compiler says so.
 
 **What grep would have got wrong** `fetchImageModels` has no caller by name outside `image.ts`.
 Its caller is `fetchChannelModels`, one file down. A name-only scan deletes a live function here.
-The reverse error is just as likely: `components/ui/select.tsx` lists every part in a trailing
+The reverse error is just as likely: `frontend/src/components/kit/select-primitive.tsx` lists every part in a trailing
 `export { … }` block, so each part looks referenced — the file appears to use itself. Removing
 those entries exposed the truth, and `SelectGroup`, `SelectLabel` and `SelectSeparator` had no
 caller inside the file either; they were deleted rather than narrowed, because a component nothing
@@ -1021,7 +978,7 @@ the source of truth, and a `Record<string, string>`would have silently allowed a
 **Cost** One `as unknown as Copy` cast at the boundary, and a component that now depends on the
 dictionary's shape for its types. Both are visible where they are written down.
 
-**Where** `components/layout/resource-center-panel.tsx`, `components/layout/resource-setup-gate.tsx`,
+**Where** `frontend/src/components/settings/resource-center-panel.tsx`, `frontend/src/components/settings/resource-setup-gate.tsx`,
 `src/i18n/locales/{zh-CN,en-US}.ts` (`resources.*`).
 
 ---
@@ -1107,7 +1064,7 @@ directions, compares the two dictionaries to each other, and treats a `t("…", 
 object path as a branch rather than a missing leaf. `check:exports` uses the language service.
 
 **The two exceptions, written down where the script can see them** `chinese()` in
-`lib/gateway-labels.ts` asks only the zh dictionary, so `gateway.models.*` and
+`lib/server-labels.ts` asks only the zh dictionary, so `gateway.models.*` and
 `gateway.variants.*` are zh-only on purpose — enumerating them in `check-i18n.cjs` stops the
 "only in zh-CN" check from failing every run. And four `t(variable)` call sites read their key
 from a local constant list; the eight resulting keys are listed by hand in `HAND_RESOLVED`,
@@ -1120,7 +1077,7 @@ never page furniture: they are stop-generation, export, clipboard and failure me
 _by_ the canvas. `canvas.project.*` keeps the list-management keys, which is what "project"
 actually means here.
 
-**Where** `canvas/web/scripts/check-i18n.cjs`, `scripts/check-exports.cjs`,
+**Where** `frontend/scripts/check-i18n.cjs`, `scripts/check-exports.cjs`,
 `scripts/check-decisions.cjs`, `package.json`.
 
 
@@ -1201,7 +1158,7 @@ because each hook carries its own imports and the contract type is written down 
 implicit. The win is that "what a node editor may touch" is now a 23-line type you can read in one
 screen, and that proving an editor correct no longer means standing up a 3,459-line component.
 
-**Where** `canvas/web/src/pages/canvas/hooks/`, `canvas/web/src/lib/canvas/`.
+**Where** `frontend/src/pages/canvas/hooks/`, `frontend/src/lib/canvas/`.
 
 
 ## 44. `handleGenerateNode` was 440 lines and four of them did not talk to each other
@@ -1419,55 +1376,6 @@ one, and the local gateway reports neither.
 `frontend/src/components/settings/resource-center-panel.tsx`, `i18n/locales/`.
 
 
-## 49. An unreadable store is preserved, refused, and explained
-
-**Decision** Both `persist` storage adapters catch their own parse failure instead of letting it
-escape. On failure they copy the raw bytes to `<key>.corrupt-<timestamp>`, record the failure in
-`stores/use-storage-recovery-store.ts`, return `null` so hydration proceeds with defaults on
-purpose, and from then on refuse every `setItem`. A banner
-(`components/layout/storage-recovery-banner.tsx`) says what happened and offers three things.
-
-**Why catching is not enough on its own** Known issue #12 was reproduced before this was written. A
-2314-byte `canvas_store` holding one canvas with two nodes was replaced with the string
-`{oops truncated` and the page was hard-reloaded. The app came up on a brand-new project id with
-"No nodes on this canvas", the console was **empty**, and within seconds the stored blob was 378
-bytes — the empty project. The original was gone from the browser. So the failure mode was not
-"boots empty", it was "boots empty and then destroys what it could not read".
-
-That is the reason for the write refusal. Returning `null` alone would have left the second half
-intact: zustand's `persist` wraps `setState`, `hydrated: true` is a state change, and the canvas
-store's dedupe guard is skipped when `queuedPersistState` is `null` — which it is, precisely
-because the parse failed.
-
-**The three actions, in the order that protects the user** Export the raw bytes first: it is the
-only action that changes nothing and loses nothing, and it turns an opaque failure into a file the
-user can keep. Retry second: it re-reads, which genuinely helps the transient case (a write caught
-mid-flight, a quota hiccup) and is harmless in the permanent one. "Clear and start over" last and
-styled as a link, not a button, because it re-enables writing over the original key — though it
-cannot lose anything, since the copy is already on disk.
-
-**Two details that only showed up in the browser**
-
-- The banner was `top-4` and overlapped the canvas title and the top-bar controls. Moved to
-  `top-16`, which is where the reconnect banner already sits.
-- "Clear and start over" dismissed the banner but wrote nothing, because `setItem` only runs on a
-  state change and dismissing is not one. Reloading immediately after showed the banner again, which
-  reads as a broken button. The handler now nudges both stores with `setState({})` so the cleared
-  state actually replaces the blob.
-
-**Scope** The banner renders in `frontend/src/layouts/user-layout.tsx`, not in the canvas list, because `/`
-resolves straight to a canvas — most sessions never open the list, and a message that only appears
-there would be seen by almost nobody.
-
-**Verified** The reproduction was repeated against the fix: banner appears, main key still holds
-`{oops truncated`, a `.corrupt-2026-10-30T19-28-33-388Z` copy exists, "clear and start over" then
-rewrites the main key to a valid 378-byte blob. The origin's data was restored from a backup
-afterwards and checked: two nodes, correct title, no banner, console empty.
-
-**Where** `stores/use-storage-recovery-store.ts`, `lib/persist-recovery.ts`,
-`components/layout/storage-recovery-banner.tsx`, both persisted stores.
-
-
 ## 50. Every floating panel is 1000×646, or it is not a panel
 
 **Decision** `Dialog` no longer takes `width`. It takes a required `size` from a closed set, and
@@ -1552,64 +1460,7 @@ column was 320 then too; the arithmetic, not the change, is what shows it. The r
 (`flex-wrap`), so the three buttons reflow instead of the last one disappearing.
 
 **Where** `components/canvas/canvas-node-{crop,mask-edit,split}-dialog.tsx`,
-`frontend/src/components/canvas/canvas-node-hover-toolbar.tsx`.
-
-
-## 52. The persisted format has a version, and a migration that can refuse
-
-**Decision** Both persisted stores carry `version: 1`, and both read their blob through a module that
-checks the version, migrates an older blob, and then asserts the result has the current shape. A
-throw from any of those three steps is the same signal as invalid JSON: copy the blob aside, refuse
-to write, show the banner.
-
-**What was wrong without it** zustand's default `merge` is
-
-```js
-(persistedState, currentState) => ({ ...currentState, ...persistedState });
-```
-
-which is **shallow at the top level**. `projects` is replaced wholesale by whatever was on disk, so
-nothing inside a project ever receives a default. A field added to `CanvasProject` comes back
-`undefined` on every canvas that predates it. `viewport` is the sharp case: it is `{x, y, k}` and
-every coordinate on the canvas passes through `k`, so a missing `k` is not a cosmetic gap, it is
-`NaN` in the transform and a blank canvas.
-
-And nothing checked. Both stores left `version` at zustand's default of `0`, so the stored version
-and the expected version were always equal and the comparison always took the branch that uses the
-state unexamined.
-
-**Why the migration lives in `getItem`, not in zustand's `migrate`** zustand runs its migration
-_after_ `getItem` returns. A failure there cannot reach this app's recovery: it logs
-`State loaded from storage couldn't be migrated` and discards the state, and the store then persists
-defaults over the blob — the data-loss path #49 was written to close. Worse, it would have got
-through even with the write refusal, because `getItem` had succeeded. Doing the work inside
-`getItem` means there is exactly one failure path, and it is the one with a banner on it.
-
-**The three steps**
-
-1. _Version check._ A blob from a **newer** build throws rather than being guessed at. There is no
-   safe interpretation of a format we have never seen.
-2. _Migration (`version < 1`)._ Backfills what older blobs lack — `lastProjectId`, and per project
-   `chatSessions`, `activeChatId`, `backgroundMode`, `showImageInfo`, `viewport`. The per-project
-   pass is the part zustand's shallow merge structurally could not do.
-3. _Assertion._ Shallow, but it guarantees the canvas can render: every project has an id, a title,
-   array `nodes`, array `connections`, and a viewport with finite `x`, `y` and a positive `k`. This
-   is what catches a shape change nobody migrated.
-
-**Tested both ways**
-
-`tests/persist-migration.test.ts` — 14 cases against the real read path: a current blob passes
-through, a versionless blob gains `lastProjectId`, a project missing the newer fields is backfilled,
-a viewport with no `k` becomes `k: 1`, a zero zoom is treated as unset, a newer version throws,
-malformed JSON throws, `nodes` that is not an array throws, an asset with no `data` is dropped.
-
-End to end in the browser: a forged versionless blob whose viewport had only `x` and `y` was written
-to IndexedDB and the page reloaded. It came back at `version: 1` with `k: 1`, both nodes intact,
-rendering at 100% — no `NaN`, no blank canvas, no banner (it was migratable, not unreadable). The
-original blob was restored afterwards and checked.
-
-**Where** `stores/canvas/canvas-persist.ts`, `stores/asset-persist.ts`, both stores,
-`tests/persist-migration.test.ts`.
+`frontend/src/components/canvas/canvas-node-toolbar.tsx`.
 
 
 ## 53. One run protocol; media type is data, not routing
@@ -1706,7 +1557,7 @@ no image, refuses audio, and counts two images for `both`) without a workflow id
 Verified against the running gateway for all six H3 workflows and all four Qwen modes; a real
 image generation still passes end to end.
 
-**Where** `internal/workflow/media.go`, `internal/workflow/entry.go`, `internal/server/routes_video.go`,
+**Where** `internal/workflow/media.go`, `internal/workflow/entry.go`, `internal/server/routes_generation.go`,
 `internal/server/routes_generation.go`, `workflows/registry.json`.
 
 
@@ -1882,6 +1733,10 @@ frames the request supplies. `interpolation` is a run input the gateway executes
 runs on the produced video inside the same run. The task id the node stores is a run id, and the
 in-flight preview frame is part of the run payload.
 
+**Amended by #62** The post-step is gone with the `interpolation` run input: interpolation is a workflow now
+(`video-rife`), so nothing in a run executes a frame-rate pass. What a video run carries — roles, frames,
+`frameMode` — is what this entry is about, and it is unchanged.
+
 **Why the old shape had to go** `/v1/videos` was the most branch-heavy endpoint in the gateway: one
 multipart form whose field names (`image[]`, `images`, `first_frame`, `video[]`, `audio[]`) had to be
 resolved against the workflow, a `params` JSON string carrying `frameMode` and `interpolation`, and
@@ -1919,8 +1774,7 @@ media by role (frames, references, no media for text-to-video), `interpolation` 
 step and preview reporting, failure named as a video task failure, and cancel only on an explicit
 user stop.
 
-**Where** `internal/server/postprocess.go`, `internal/server/routes_runs.go`,
-`internal/server/routes_video.go`, `internal/workflow/inputs.go`,
+**Where** `internal/server/routes_runs.go`, `internal/server/routes_generation.go`, `internal/workflow/inputs.go`,
 `frontend/src/services/api/video.ts`, `frontend/src/services/api/runs.ts`, `frontend/src/pages/canvas/project.tsx`,
 `docs/protocol.md`.
 
@@ -2042,7 +1896,7 @@ A clean machine can both report and install this workflow now, so the folder nam
 the one written there.
 
 **Where** `workflows/video-rife.json`, `workflows/registry.json`, `internal/workflow/bindings.go`,
-`internal/workflow/loaders.go`, `internal/server/routes_video.go`, `internal/server/routes_runs.go`,
+`internal/workflow/loaders.go`, `internal/server/routes_generation.go`, `internal/server/routes_runs.go`,
 `frontend/src/services/api/video.ts`.
 
 
@@ -2108,7 +1962,7 @@ the setup status totals and in `missing.nodes` (models and tools alike), and a w
 
 **Where** `internal/workflow/entry.go`, `internal/workflow/render.go`, `internal/setup/scan.go`,
 `internal/server/routes_admin.go`, `internal/resource/status.go`, `workflows/registry.json`,
-`resources/index.json`, `frontend/src/lib/canvas/tool-workflows.ts`.
+`resources.json`, `frontend/src/lib/canvas/tool-workflows.ts`.
 
 
 ## 65. The image upscaler is a run, and a tool workflow takes exactly one item
@@ -2144,14 +1998,14 @@ fields.
 
 **Tested** `internal/server/runs_e2e_test.go:TestRunImageUpscaleTakesOneImage` (image reaches the
 graph, `upscale_model` reaches its node, no image is a 400),
-`frontend/tests/api-image-upscale.test.ts` (one upload + one run, nothing on `/v1`, a failed run surfaces its
+`frontend/tests/api-image-runs.test.ts` (one upload + one run, nothing on `/v1`, a failed run surfaces its
 message). In the browser: the 放大 dialog listed the three ESRGAN models from `/api/workflows`,
 submitted a run, and produced a 4096×4096 PNG node.
 
 **Where** `internal/server/routes_generation.go`, `internal/server/routes_admin.go`,
 `workflows/registry.json`, `frontend/src/services/api/workflows.ts`,
 `frontend/src/services/api/image.ts`,
-`frontend/src/components/canvas/canvas-node-super-resolve-dialog.tsx`.
+`frontend/src/components/canvas/canvas-tool-node-panel.tsx`.
 
 
 ## 66. Everything under `workflows/` is English _(the one path it kept was not the author's, see #117)_
@@ -2172,13 +2026,13 @@ gateway sends (#8 already said this; the registry just had not caught up).
 Load 2`). Translated anyway, because a reader opening a shipped workflow should not have to guess
   what "① 单采 SelfLift（日常版参数）" means, and a half-translated file is worse than either.
 - _A real path_: `image-qwen21-outpaint.json` names its LoRA `Qwen-功能2.1/Qwen21-图像扩展…safetensors`,
-  and `resources/index.json` installs it at exactly that path. **Left alone** — that string is a
+  and `resources.json` installs it at exactly that path. **Left alone** — that string is a
   filename on disk, not copy.
 
 **Cost** A workflow re-imported from an author's file comes back with its Chinese titles; the same
 pass has to be applied again. The registry is the part that matters, and it is machine-written.
 
-**Also found** `resources/index.json` was Chinese-only: pack labels and descriptions render verbatim
+**Also found** `resources.json` was Chinese-only: pack labels and descriptions render verbatim
 in the resource panel, with no key indirection. That is #67; it could not be fixed by editing JSON
 alone.
 
@@ -2187,7 +2041,7 @@ alone.
 
 ## 67. The resource catalogue is English; its Chinese lives beside the app _(one of the two paths was not upstream's, see #117)_
 
-**Decision** `resources/index.json` carries no Chinese copy — pack `label`/`description`, resource
+**Decision** `resources.json` carries no Chinese copy — pack `label`/`description`, resource
 `label`/`note`/`license` are English. The Chinese sits in
 `frontend/src/lib/resource-copy-zh.ts`, keyed by pack/resource id, and
 `ResourceCenterPanel` looks it up before falling back to the index text. Vendored third-party content
@@ -2202,7 +2056,7 @@ downloaded.
 `keySeparator: "."` such a key is read as a nested path and never resolves, so the natural home for
 "Chinese keyed by id" (`gateway.models.<id>`, which works because model ids have no dots) does not fit.
 A typed `Record<string, …>` next to it is the same idea with the id treated as an opaque string. The
-`resolvedLanguage` check is copied from `gateway-labels.ts`, so both tables switch language the same
+`resolvedLanguage` check is copied from `server-labels.ts`, so both tables switch language the same
 way.
 
 **What is still Chinese, on purpose** Two `target` paths name files the upstream authors published in
@@ -2216,7 +2070,7 @@ index itself containing Chinese only in `target`. In the browser: the Add-workfl
 English with the language set to English and in Chinese with it set to 中文, over the same rows,
 including the LoRA whose path stays Chinese.
 
-**Where** `resources/index.json`, `frontend/src/lib/resource-copy-zh.ts`,
+**Where** `resources.json`, `frontend/src/lib/resource-copy-zh.ts`,
 `frontend/src/components/settings/resource-center-panel.tsx`.
 
 
@@ -2224,7 +2078,7 @@ including the LoRA whose path stays Chinese.
 
 **Decision** `GET /v1/models` is deleted. `GET /api/workflows` gained a `models` array per row —
 `{id, label, baseModel, baseModelLabel, imageInputs}` — built by the same expansion `ResolveModel`
-accepts. The canvas syncs from it (`hooks/use-local-gateway-sync.ts` → `lib/gateway-models.ts`) and
+accepts. The canvas syncs from it (`hooks/use-local-server-sync.ts` → `lib/server-models.ts`) and
 decides what the picker offers.
 
 **Why the endpoint had to go** It was the last route whose only job was to present, and it presented
@@ -2259,8 +2113,8 @@ returned three images.
 
 **Where** `internal/server/routes_admin.go`, `internal/server/e2e_test.go`,
 `frontend/src/services/api/workflows.ts`,
-`canvas/web/src/hooks/use-local-gateway-sync.ts`,
-`canvas/web/src/lib/gateway-models.ts`, `frontend/src/services/api/image.ts`
+`frontend/src/hooks/use-local-server-sync.ts`,
+`frontend/src/lib/server-models.ts`, `frontend/src/services/api/image.ts`
 (`fetchChannelModels`).
 
 
@@ -2303,7 +2157,7 @@ rule was a branch keyed to a workflow id.
 `video_fixture_test.go` kept only the shared fixture and multipart helper. In the browser: a fresh
 page load syncs its models, generates an image, and lists the workflows with no request to `/v1`.
 
-**Where** `internal/server/routes_generation.go`, `internal/server/routes_video.go` (deleted),
+**Where** `internal/server/routes_generation.go`, `internal/server/routes_generation.go` (deleted),
 `internal/server/runs.go`, `internal/server/server.go`, `internal/server/helpers.go`,
 `canvas/web/src/services/api/{image,video,audio}.ts`, `docs/protocol.md`, `docs/server.md`,
 `README.md`.
@@ -2373,115 +2227,7 @@ network capture shows every gateway request on `/api/...` with no `/v1` path any
 `frontend/src/components/canvas/canvas-system-status.tsx`,
 `canvas/web/src/pages/canvas/hooks/use-plugin-host.tsx`,
 `frontend/src/stores/use-config-store.ts`. (The `lib/local-session.ts` this list used to
-name went with the session tracker, and `POST /api/prompts/chat` — the endpoint #73 gave the prompt path —
-went when prompts became the agent's socket.)
-
-
-## 73. Text is a prompt route, not a model
-
-**Decision** `POST /api/prompts/chat` answers one prompt with one text: `prompt` (required), `system`
-and images (optional), plus the endpoint's `promptBaseUrl` / `promptApiKey` / `promptModel`. The gateway
-adds no wording of its own and answers once — no streaming.
-
-**Why the canvas needed it** The text node and the plugin API's `generateText` called OpenAI's
-_Responses_ API (`POST /v1/responses`) straight at the channel address. The gateway has never served
-that path — it went with the rest of `/v1` — so in this build every text generation was a 404. The
-canvas was carrying a whole Responses client (SSE parsing, tool calls, `input_text` / `input_image`
-conversion) with nothing on the other end.
-
-**Why not OpenAI compatibility** Serving `/v1/responses` or `/v1/chat/completions` would have meant the
-gateway re-implementing another protocol for one feature. The host that actually answers is the
-configured model server; the gateway's only job there is to be the party that sends the request.
-`/api/prompts/chat` is that job and nothing else: it reads the prompt, hands it to the same `chat()`
-the other three prompt routes use, and returns `{text, model, elapsedMs}`.
-
-**The one thing it decides** An empty `system` is omitted rather than sent as an empty turn: a model
-that receives a blank system role may answer it instead of the prompt. `Optimize`, `OptimizeImage` and
-`Caption` all pass a system message, so nothing else changed.
-
-**What the canvas lost** The streaming consumer, the tool-call types and `buildApiUrl`. A text node
-shows "generating" and then the answer, which is what a non-streaming route can report, and a plugin's
-`onDelta` fires once with the whole answer. Text nodes still ask for several variants (`textCount`):
-the canvas sends N requests, so the gateway's contract stays one in, one out.
-
-**What replaced the model guard** Text used to be gated on a channel model (`isAiConfigReady`), and no
-workflow has a text capability, so a text node could never start — the click opened the settings and
-nothing else. The gate is now `promptEndpointReady(config)` (the endpoint's base URL, key and model),
-which sends the user to the prompt-API tab, and the config node's empty "pick a model" shows the
-endpoint's model instead: the only model that answers.
-
-**Tested** `make check`, `make test-race`, `npm run check` (lint, types, i18n, exports), `npx vitest
-run`. New: `internal/server/prompt_chat_e2e_test.go` (the configured endpoint and the one user
-turn, system plus image parts, unconfigured settings, the endpoint's own error, an empty prompt),
-three `Optimizer.Complete` cases, `tests/api-prompts.test.ts` for the form the canvas builds. In
-the browser, against a real model (`qwen3.8-27b` on `172.16.9.7:9999`, configured through the settings
-UI): a text node holding "写一句关于海边灯塔的诗，不超过二十个字" produced "灯塔守夜，潮声吻着星光"; the
-gateway log shows `POST /api/prompts/chat 200` and one `POST /v1/chat/completions` to the model server,
-and the browser's own capture shows no `/v1` path on the gateway.
-
-**Where** `internal/prompt/optimizer.go` (`ChatRequest`, `Complete`, `chatMessages`),
-`internal/server/routes_generation.go` (`handlePromptChat`, `promptCloud`, `promptImageURLs`),
-`canvas/web/src/services/api/prompts.ts` (the four prompt routes, moved out of `image.ts`),
-`frontend/src/services/api/image.ts`,
-`canvas/web/src/pages/canvas/hooks/{use-generation-runs,use-plugin-host}.tsx`,
-`frontend/src/pages/canvas/project.tsx`,
-`frontend/src/stores/use-config-store.ts`,
-`canvas/web/src/components/canvas/{canvas-config-node-panel,canvas-node-prompt-panel}.tsx`.
-
-
-## 74. The prompt endpoint is called what it is, and text has no model
-
-**Decision** Three leftovers from the cloud era, removed together:
-
-1. `cloud` → `prompt` everywhere it meant "the configured chat endpoint": the Go type is
-   `prompt.Endpoint`, the request fields are `promptBaseUrl` / `promptApiKey` / `promptModel` /
-   `promptEndpointId`, the config keys are `promptBaseUrl` / `promptApiKey` / `promptModel` /
-   `promptEndpoints` / `promptEndpointId`, the settings tab is `prompt-api`, and the error codes are
-   `prompt_not_configured` / `prompt_invalid_url` / `prompt_api_failed` / `prompt_api_timeout`.
-2. `ImageCaptionEngine` (`"qwen35" | "florence" | "cloud"`) is gone. Only `"cloud"` was ever
-   produced — the canvas hardcoded it and the gateway always answered it — so the union documented
-   two engines that do not exist. `captionEngine` / `captionEngineUsed` went with it, and so did the
-   `provider: "cloud"` / `engine: "cloud"` fields the gateway echoed back: one producer needs no label.
-3. Text mode has no model picker. It offered "text models" (a capability no workflow has, so the list
-   was always empty) plus a `caption:cloud` entry that was really a mode switch. Both are replaced by
-   the prompt endpoint's model in a read-only chip, and by a separate **反推** button beside the send
-   button.
-
-**Why now** The rename was deferred while `/v1` was being deleted, and the caption union was blocked
-by the same thing: with `docs/known-issues.md`'s text node still 404ing there was no working path to
-name. Decision 73 created it, so the names had to follow — "cloud" described a provider that this
-build does not have, and a picker with an empty list is not a choice.
-
-**What the split means for the four routes** The endpoint travels per request, but there is exactly
-one of it in the settings, so the canvas services read it instead of taking it as an argument: the
-three call sites that each rebuilt `{ baseUrl, apiKey, model }` from config now pass nothing. Images
-are attached only where they are read — `optimize-image` and `optimize` never sent them anywhere, and
-`optimize-image` is text-only by design, so its client stopped uploading files it knew would be
-ignored.
-
-**Migration** A saved config that still says `promptCloud*` is read once by
-`withLegacyPromptFields()` and written back in the current spelling only. It is four keys and a
-rename; silently dropping a working endpoint would be a worse bug than the name ever was.
-
-**Cost** A hand-written client posting `cloudBaseUrl` gets a `prompt_not_configured` 400 instead of
-silently working. Nothing outside this repository calls these routes.
-
-**Tested** `make check`, `make test-race`, `npm run check` (lint, types, i18n, exports), `npx vitest
-run` (128; new `tests/config-migration.test.ts` covers the rename, "current spelling wins" and "no
-prompt fields at all"). In the browser with the pre-rename config still in localStorage: the config
-node and the text panel show `qwen3.8-27b` (migrated, not re-entered), the settings tab lists the
-endpoint as "使用中", a text generation answered `孤灯向海，夜浪无声` via `POST /api/prompts/chat`, and the
-caption route returned a prompt with no `engine` field.
-
-**Where** `internal/prompt/optimizer.go`, `internal/server/routes_generation.go`,
-`canvas/web/src/lib/config-migration.ts`,
-`frontend/src/stores/use-config-store.ts`,
-`canvas/web/src/services/api/prompts.ts`,
-`canvas/web/src/components/canvas/canvas-prompt-endpoint-chip.tsx`,
-`frontend/src/components/canvas/canvas-node-prompt-panel.tsx`,
-`canvas/web/src/components/canvas/canvas-config-node-panel.tsx`,
-`canvas/web/src/components/settings/app-config-modal.tsx`,
-`frontend/src/types/canvas.ts`.
+name went with the session tracker, and the prompt route went when prompts became the agent's socket.)
 
 
 ## 75. Prompts are served by AlayaCore, and one instance belongs to one person
@@ -3461,7 +3207,7 @@ them. Reading an agent now has exactly one shape: a session (`Sessions.Connect`)
 socket's watcher.
 
 **Why** `Run` spawned a process, wrote one request, read until the turn ended and released — the shape of
-`POST /api/agent/chat`, which was deleted in #74/#82 when prompts became the socket's. After that the only
+`POST /api/agent/chat`, which was deleted when prompts became the socket's (#82). After that the only
 caller was `run_test.go`: golangci's `unused` stayed quiet because the test counted as a caller, and the
 suite looked green on a route that no longer exists. `turnStep` is what both paths actually shared, and it
 stayed — `Session.pump` is now its only caller, which is the honest count.
@@ -3672,7 +3418,7 @@ answered.
 ## 117. One of the two Chinese paths was not the author's after all _(the other path is gone too)_
 
 **Decision** `image-qwen21-outpaint.json` loads its LoRA as `qwen-image-2.1-outpaint-v2.safetensors`, and
-`resources/index.json` installs it at `loras/qwen-image-2.1-outpaint-v2.safetensors`. The
+`resources.json` installs it at `loras/qwen-image-2.1-outpaint-v2.safetensors`. The
 `loras/Qwen-功能2.1/Qwen21-图像扩展…` path is gone, directory and all.
 
 **Why #66 and #67 were wrong about it** Both kept that path on the stated grounds that it is "a filename
@@ -3699,7 +3445,7 @@ workflow's dropdown: `internal/generate/lora.go` compiles the filter with `(?i)`
 `frontend/tests/resource-copy-zh.test.ts` passes and now has one Chinese `target` to police instead of two — it
 caught the first draft of the new index `note`, which had quoted the old folder name.
 
-**Where** `workflows/image-qwen21-outpaint.json`, `resources/index.json`, #66, #67.
+**Where** `workflows/image-qwen21-outpaint.json`, `resources.json`, #66, #67.
 
 
 ## 118. The H3 pack stops being the one we cannot check
@@ -3740,50 +3486,8 @@ its checksum instead of silently installing something else — the intended fail
 has to be updated when upstream moves. And a hash can only be added this way for a host that publishes
 one; a source that offers neither header still needs the bytes downloaded once.
 
-**Where** `resources/index.json`, `workflows/video-h3-ref2va-drama.json`,
+**Where** `resources.json`, `workflows/video-h3-ref2va-drama-vdn.json`,
 `frontend/src/lib/resource-copy-zh.ts`.
-
-
-## 120. taeh3 stops being a binary of unknown origin
-
-**Decision** `h3_tiny_vae` is downloaded, not bundled: `resources/payload/vae_approx/` is gone and the
-index entry carries two sources plus the correct license. The three H3 graphs still say
-`tiny_vae: taeh3.safetensors` — the upstream file has exactly that name, so nothing in `workflows/` moved.
-
-**What was wrong with it** It was the only model in the catalogue with `sources: []`, which is why it was
-staged under `resources/payload/` in the first place — a 9.8 MB safetensors in git that nothing in the
-repository could describe beyond "preview VAE". Its `license` was declared as *MiniMax H3 Community
-License*, which is not what it is.
-
-**What it actually is** Byte-identical to `Kijai/MiniMax-H3-TAE → vae_approx/taeh3.safetensors`
-(`x-linked-etag` `f0f60fa0…`, `x-linked-size` 9791388), Apache-2.0, and Kijai is the author of the KJNodes
-node that consumes it. A re-publisher, `t8star/Taeh3-Comfy`, records the same hash in a `provenance.json`
-with `"modifications": "filename only; tensors unchanged"` and carries the upstream revision
-(`a213ac8b…`). The file had a paper trail all along; we simply had not written it down.
-
-**Why the file cannot just be dropped instead** Because a missing `vae_approx` entry does not degrade, it
-fails twice:
-
-- `internal/setup/scan.go` validates every loader input against ComfyUI's option list and turns any miss
-  into a `Problem`, which makes `available` false — the canvas then filters the workflow out of the model
-  list (`web/src/lib/gateway-models.ts`), so the H3 graphs vanish from the picker entirely.
-- If one is submitted anyway, ComfyUI rejects the prompt: `tiny_vae` is a combo whose options are
-  enumerated from disk at validation time (`nodes/preview_override_node.py`), so the hard-coded filename
-  fails `value_not_in_list` in `execution.py` before any node runs.
-
-The graceful path exists — `load_tiny_vae_decoder` returns `None` with a warning when the file is absent,
-and the node falls back to the default previewer — but validation never lets execution reach it. So the
-only way to take the binary out of the repository without breaking three workflows was to give it a URL.
-
-**Why "now it needs the network" is not a cost** The `h3` pack already pulls roughly 60 GB on install.
-9.8 MB against that is noise, and it buys a verified hash the bundled path never had.
-
-**Tested** `make check`, `tsc --noEmit`, and the canvas suite (133 tests) pass; the payload path unit test
-is unaffected because `payloadPath` itself did not change. `resources/payload/` now contains node packs
-only.
-
-**Where** `resources/index.json`, `frontend/src/lib/resource-copy-zh.ts`,
-`resources/payload/vae_approx/`.
 
 
 ## 121. Every vendored pack says which commit it is, and which files we changed
@@ -3844,7 +3548,7 @@ pinned to `26545cc2dd95`, the commit `main` pointed at. All nine node URLs name 
 **Tested** `make check`, `tsc --noEmit` and the canvas suite (133 tests) pass; `gofmt` clean after the struct
 change.
 
-**Where** `resources/index.json`, `internal/resource/resource.go`.
+**Where** `resources.json`, `internal/resource/resource.go`.
 
 
 ## 126. The node packs are no longer bundled
@@ -3894,7 +3598,7 @@ by the panel: the packs were deleted from the reference machine's `custom_nodes`
 exercises the new code.
 
 **Where** `internal/resource/jobs.go`, `internal/resource/install_extract_test.go` (new),
-`resources/index.json`, `frontend/src/lib/resource-copy-zh.ts`, `resources/payload/` (deleted).
+`resources.json`, `frontend/src/lib/resource-copy-zh.ts`, `resources/payload/` (deleted).
 
 
 ## 129. The file is `resources.json`, not `catalogue.json`
@@ -3920,7 +3624,7 @@ workflow row is called `resources`. Beside `workflows/` at the root it also stat
 **Tested** `gofmt`, `go vet`, `go test ./internal/...`, `tsc --noEmit`, 132 canvas tests. A tree-wide grep for
 `catalogue` now returns only the entries above, which are prose.
 
-**Where** `resources.json` (moved), `internal/resource/`, `internal/config/`, `canvas/web/`,
+**Where** `resources.json` (moved), `internal/resource/`, `internal/config/`, `frontend/`,
 `README.md`, `docs/server.md`, `docs/known-issues.md`.
 
 
@@ -3963,7 +3667,7 @@ informational.
 class our graphs need from this pack": `h3_audio_t8_node` claimed classes no graph of ours uses, and a pack that
 claims more than it provides hides a missing pack behind a satisfied check.
 
-**Where** `internal/resource/catalogue.go`, `resources.json`, `internal/resource/catalogue_test.go`.
+**Where** `internal/resource/resource.go` (`Index`), `resources.json`, `internal/resource/catalogue_test.go`.
 
 ## 131. `core` stops being a pack
 
@@ -4071,7 +3775,7 @@ modeProblems: {inpaint: 2}`, every other workflow unchanged. `gofmt`, `go vet`, 
 `tsc --noEmit`, 132 canvas tests.
 
 **Where** `internal/setup/{scan.go,setup.go,scan_test.go}`, `internal/resource/{resource.go,status.go}`,
-`canvas/web/src/{services/api/{resources,workflows}.ts,lib/gateway-models.ts,stores/use-config-store.ts,
+`canvas/web/src/{services/api/{resources,workflows}.ts,lib/server-models.ts,stores/use-config-store.ts,
 components/image-settings-panel.tsx,components/canvas/canvas-image-settings-popover.tsx,
 components/settings/resource-center-panel.tsx,i18n/locales/{en-US,zh-CN}.ts}`.
 
@@ -4358,8 +4062,8 @@ out), picking one updates the card and the node's `params.loras`, and the consol
 **Where** deleted: `canvas/plugins/**`, `canvas/web/public/plugins/**`,
 `canvas/web/src/{lib/canvas/{plugin-loader.ts,plugin-runtime.ts,plugin-node-context.ts,canvas-event-bus.ts},stores/canvas/use-plugin-store.ts,components/canvas/canvas-plugin-manager-modal.tsx,pages/canvas/hooks/use-plugin-host.tsx,types/canvas-plugin.ts}`.
 Added: `canvas/web/src/{components/canvas/nodes/lora-node.tsx,types/canvas-node.ts,services/api/loras.ts}`.
-Touched: `node-registry.ts`, `builtin-nodes.tsx`, `canvas-node.tsx`, `project.tsx`, `canvas-toolbar.tsx`,
-`canvas-create-menus.tsx`, `canvas-top-bar.tsx`, `user-status-actions.tsx`,
+Touched: `frontend/src/lib/canvas/node-registry.ts`, `frontend/src/components/canvas/nodes/builtin-nodes.tsx`, `frontend/src/components/canvas/canvas-node.tsx`, `frontend/src/pages/canvas/project.tsx`, `canvas-toolbar.tsx`,
+`frontend/src/components/canvas/canvas-create-menus.tsx`, `frontend/src/components/canvas/canvas-top-bar.tsx`, `frontend/src/components/layout/user-status-actions.tsx`,
 `services/{localforage-databases,local-storage-usage}.ts`, `vite.config.ts`, `vite-env.d.ts`,
 `frontend/src/constant/canvas.ts`, `frontend/src/types/canvas.ts`, `frontend/src/services/api/video.ts`, `i18n/locales/*`,
 `internal/server/routes_mcp.go`, `scripts/check-exports.cjs`, `docs/known-issues.md`, `README.md`,
@@ -4496,8 +4200,8 @@ header-less `GET /api/workflows`, which is the path this entry changed most. An 
 the console stays empty. No generation was re-run for this entry: the removed header was ignored by the
 gateway, and the run and upload request shapes are covered by `frontend/tests/api-runs.test.ts`.
 
-**Where** `canvas/src/stores/use-config-store.ts`, `services/api/{runs,workflows,image,audio,video}.ts`,
-`hooks/use-local-gateway-sync.ts`, `components/settings/{app-config-modal,channel-editor-drawer}.tsx`,
+**Where** `frontend/src/stores/use-config-store.ts`, `services/api/{runs,workflows,image,audio,video}.ts`,
+`hooks/use-local-server-sync.ts`, `components/settings/{app-config-modal,channel-editor-drawer}.tsx`,
 `frontend/src/components/layout/client-root-init.tsx`, `i18n/locales/*`, `frontend/tests/model-selection.test.ts`,
 `internal/httpx/middleware.go`.
 
@@ -4560,8 +4264,8 @@ a tab left on a canvas that no longer existed got `404`, went to `/`, and create
 
 **Where** `canvas/src/{services/api/canvases.ts,lib/canvas/{save-queue.ts,last-canvas.ts},stores/canvas/use-canvas-store.ts}`
 (new/rewritten), `pages/canvas/{entry.tsx,project.tsx}`, `components/{canvas/{canvas-manager-dialog,canvas-project-card,canvas-top-bar,canvas-delete-projects-dialog}.tsx,layout/{user-layout,client-root-init}.tsx}`,
-`services/{file-storage,image-storage}.ts`, `frontend/src/lib/canvas/node-title.ts`, `i18n/locales/*`,
-`tests/{canvas-save-queue,node-title}.test.ts`, `scripts/check-exports.cjs`, `internal/httpx/middleware.go`.
+`services/{file-storage,image-storage}.ts`, `i18n/locales/*`,
+`tests/canvas-save-queue.test.ts`, `scripts/check-exports.cjs`, `internal/httpx/middleware.go`.
 
 
 ## 155. Preferences live with the workspace, and the browser stores nothing
@@ -4663,14 +4367,14 @@ empty console.
 **Where** `internal/canvas/{files.go,files_test.go}` (new), `internal/upload/{upload.go,upload_test.go}`,
 `internal/task/task.go`, `internal/server/{routes_runs.go,routes_canvas.go,routes_generation.go,runs.go,server.go,e2e_test.go,canvas_e2e_test.go,*_runs_e2e_test.go}`,
 `internal/config/config.go`, `canvas/src/services/{canvas-files.ts (new),file-storage.ts,image-storage.ts}`,
-`canvas/src/stores/canvas/use-canvas-store.ts`, `canvas/src/lib/canvas/{canvas-export.ts,canvas-node-factory.ts,image-thumbnail.ts}`,
-`canvas/src/components/canvas/canvas-manager-dialog.tsx`, `canvas/src/pages/canvas/project.tsx`,
-`canvas/src/i18n/locales/*`, `canvas/package.json`, `docs/server.md`.
+`frontend/src/stores/canvas/use-canvas-store.ts`, `canvas/src/lib/canvas/{canvas-export.ts,canvas-node-factory.ts,image-thumbnail.ts}`,
+`canvas/src/components/canvas/canvas-manager-dialog.tsx`, `frontend/src/pages/canvas/project.tsx`,
+`canvas/src/i18n/locales/*`, `frontend/package.json`, `docs/server.md`.
 
 
 ## 157. The gateway's liveness is learnt from the traffic, not probed
 
-**Decision** The heartbeat is gone. `services/api/gateway-status.ts` no longer has a timer, a
+**Decision** The heartbeat is gone. `services/api/server-status.ts` no longer has a timer, a
 `GET /health` probe, or a reload: a gateway request that fails at the network layer marks the gateway
 down, **any** response from it marks it up, and the banner follows. `/health` stays as an endpoint —
 what it answers (ComfyUI's reachability, workflow counts) is a question for an operator with `curl`.
@@ -4702,7 +4406,7 @@ open canvas — the banner appeared with its new wording within one poll — and
 cleared on the next poll, `window.__noReload` survived (no reload), and the new build logged **zero**
 `GET /health` requests across the whole cycle.
 
-**Where** `canvas/src/services/api/{gateway-status.ts,http.ts}`, `canvas/src/hooks/use-local-gateway-sync.ts`,
+**Where** `canvas/src/services/api/{server-status.ts,http.ts}`, `frontend/src/hooks/use-local-server-sync.ts`,
 `canvas/src/i18n/locales/*`, `canvas/tests/api-*.test.ts` (the stubs).
 
 
@@ -4748,9 +4452,9 @@ second — the dialog appeared by itself, naming when the disk copy was written 
 the `rev` with a forced save and closed the dialog with a toast. Nothing was overwritten before the
 answer.
 
-**Where** `canvas/src/lib/canvas/save-queue.ts`, `canvas/src/stores/canvas/use-canvas-store.ts`,
-`canvas/src/components/canvas/canvas-conflict-dialog.tsx` (new), `canvas/src/pages/canvas/project.tsx`,
-`canvas/src/i18n/locales/*`, `canvas/tests/canvas-save-queue.test.ts`.
+**Where** `frontend/src/lib/canvas/save-queue.ts`, `frontend/src/stores/canvas/use-canvas-store.ts`,
+`frontend/src/components/canvas/canvas-conflict-dialog.tsx` (new), `frontend/src/pages/canvas/project.tsx`,
+`canvas/src/i18n/locales/*`, `frontend/tests/canvas-save-queue.test.ts`.
 
 
 ## 159. The frontend is `frontend/`, and the build target says so
@@ -4820,9 +4524,7 @@ accepted, the first is told `closed`, and the second received 942 text events an
 prompt that had produced nothing.
 
 **Where** `internal/agent/sessions.go`, `internal/server/routes_agent.go`,
-`internal/server/agent_e2e_test.go`, `internal/agent/session_test.go`,
-`frontend/src/services/api/prompts.ts`, `frontend/src/i18n/locales/*`,
-`frontend/tests/api-prompts.test.ts`.
+`internal/server/agent_e2e_test.go`, `internal/agent/session_test.go`, `frontend/src/i18n/locales/*`.
 
 
 ## 161. A run goes into the canvas, and one function is the only place that says where
@@ -4863,7 +4565,7 @@ canvas-scoping is stated once. A run that does not belong to a canvas is not a t
   every URL they assert or stub; `api-runs.test.ts` still asserts them in full.
 
 **Still weak, and left alone** Suffix matching survives in the video and upscale stubs, because the calls
-they exercise are the ones whose shape did not change. Worse, `api-image-upscale.test.ts` keeps a stub
+they exercise are the ones whose shape did not change. Worse, `api-image-runs.test.ts` keeps a stub
 branch for `url.includes("/outputs/0")` — a route that no longer exists — so its artifact download falls
 through to the run-status fallback. The test passes because it asserts the data-URL prefix, not the bytes:
 it would not notice a download that returned the run's JSON. Nothing in this sweep touched it; it is
@@ -4882,13 +4584,13 @@ Not clicked in a browser yet: the generate path from the node itself.
 
 **Where** `frontend/src/services/api/runs.ts`, `frontend/src/lib/canvas/canvas-export.ts`,
 `frontend/tests/api-runs.test.ts`, `frontend/tests/api-video-runs.test.ts`,
-`frontend/tests/api-image-upscale.test.ts`.
+`frontend/tests/api-image-runs.test.ts`.
 
 
 ## 162. A stub that matches a URL's suffix cannot fail
 
 **Decision** The canvas tests that answer a run route their stubs by the **whole** URL and answer `404` to
-anything else, and the assertions name the whole URL too. `api-image-upscale.test.ts` is the case that made
+anything else, and the assertions name the whole URL too. `api-image-runs.test.ts` is the case that made
 this worth doing: it kept a stub branch for `/outputs/0` — a route #156 deleted — so its artifact download fell
 through to the run-status fallback and the test read a run's JSON as if it were a PNG.
 
@@ -4897,7 +4599,7 @@ request sent to the wrong place: it is written from the client's point of view, 
 whatever the client does, and the case passes on an address no gateway serves. A `404` for anything unlisted
 turns that into a failure in the one place that is cheap to fix.
 
-**What changed** `api-image-upscale.test.ts` and `api-video-runs.test.ts` gained a `ROOT`, a named upload id
+**What changed** `api-image-runs.test.ts` and `api-video-runs.test.ts` gained a `ROOT`, a named upload id
 (an upload's id is its file name, per #156, not `upl_1`), and a stub that routes the four addresses the action
 actually uses: the canvas's uploads, the canvas's runs, the run's status, and the artifact as a file of that
 canvas. The first case asserts the whole list of calls, in order. The interpolate case stopped overriding
@@ -4910,7 +4612,7 @@ the point, but it is friction, and it is why the stub lives next to the cases ra
 **Tested** `npx vitest run` (17 files, 136 tests), `npm run check`, `make check`. The upscale case now fails if
 the artifact is fetched from anywhere but `GET /api/canvases/{id}/files/{name}`.
 
-**Where** `frontend/tests/api-image-upscale.test.ts`, `frontend/tests/api-video-runs.test.ts`.
+**Where** `frontend/tests/api-image-runs.test.ts`, `frontend/tests/api-video-runs.test.ts`.
 
 
 ## 163. A citation is an id, and two nodes may share a name
@@ -5191,8 +4893,7 @@ finding — a file's name is the document's, and an import must not rewrite it.
 
 **Where** `internal/canvas/files.go`, `internal/canvas/canvas.go`, `internal/server/routes_canvas.go`,
 `frontend/src/services/canvas-files.ts`, `frontend/src/lib/canvas/canvas-document.ts`,
-`frontend/src/lib/canvas/canvas-export.ts`, `frontend/src/components/canvas/canvas-manager-dialog.tsx`,
-`frontend/src/stores/canvas/use-canvas-store.ts`.
+`frontend/src/lib/canvas/canvas-export.ts`, `frontend/src/stores/canvas/use-canvas-store.ts`.
 
 
 ## 172. One canvas, one zip, and the gateway unpacks it
@@ -5242,8 +4943,7 @@ node and title, the file kept its name and its bytes, and `canvas.json` on disk 
 
 **Where** `internal/server/canvas_import.go`, `internal/server/routes_canvas.go`, `internal/canvas/files.go`,
 `internal/canvas/canvas.go`, `internal/config/config.go`, `frontend/src/lib/canvas/canvas-export.ts`,
-`frontend/src/services/api/canvases.ts`, `frontend/src/stores/canvas/use-canvas-store.ts`,
-`frontend/src/components/canvas/canvas-manager-dialog.tsx`, `frontend/src/types/canvas-export.ts`,
+`frontend/src/services/api/canvases.ts`, `frontend/src/stores/canvas/use-canvas-store.ts`, `frontend/src/types/canvas-export.ts`,
 `frontend/src/lib/canvas/canvas-document.ts`.
 
 
@@ -5281,7 +4981,7 @@ Reference media for a run is uploaded the same way — it is the user's file, no
 rather than a short one. Nothing renames files, which is the point.
 
 **Tested** `frontend/tests/api-runs.test.ts` (a run's outputs become the document's names and the gateway's URLs),
-`frontend/tests/api-image-upscale.test.ts` (an upscale run's artifact is referenced, not fetched — the call list stops
+`frontend/tests/api-image-runs.test.ts` (an upscale run's artifact is referenced, not fetched — the call list stops
 at the run's status), `frontend/tests/api-video-runs.test.ts` (a clip's reference carries its size and duration, and the
 artifact is never fetched). Gates: `npm run check`, `npx vitest run`.
 
@@ -5323,7 +5023,7 @@ file, instead of silently being re-uploaded from whatever the page still had in 
 answer either way — the node was showing a picture whose file is gone — and the message names the file that is
 missing.
 
-**Tested** `frontend/tests/api-image-upscale.test.ts`: a source with a `storageKey` produces exactly two calls (submit,
+**Tested** `frontend/tests/api-image-runs.test.ts`: a source with a `storageKey` produces exactly two calls (submit,
 poll) and `media: {image: ["up-abcdef12.png"]}`, while a source with none still uploads first. Gates:
 `npm run check`, `npx vitest run`.
 
@@ -5839,7 +5539,7 @@ selected: `getComputedStyle` says panel 60, toolbar 45, and at a point inside bo
 the panel, while a point on the toolbar's free half still returns the toolbar. The selection bar and the
 lasso share that parent and those two numbers.
 
-**Where** `frontend/src/components/canvas/canvas-node-hover-toolbar.tsx`,
+**Where** `frontend/src/components/canvas/canvas-node-toolbar.tsx`,
 `frontend/src/components/canvas/canvas-selection-toolbar.tsx`.
 
 
@@ -6209,7 +5909,7 @@ sees it in the box. The check is exact after trimming — an input whose words m
 not flagged — so a copy that reworded the words as it copied it is missed, which is the right way round: the other
 direction would fire on correct work. Two answers are one clause longer.
 
-**Where** `frontend/src/lib/canvas/canvas-node-generation.ts` (`repeatedConnectedText`),
+**Where** `frontend/src/components/canvas/canvas-node-generation.ts` (`repeatedConnectedText`),
 `frontend/src/lib/canvas/canvas-agent-tools.ts` (`connect`, `set_prompt`),
 `internal/server/agent_instructions.go`, `internal/server/mcp_test.go`, `frontend/tests/canvas-generation-context.test.ts`.
 
@@ -6528,7 +6228,7 @@ instructions, the MOSS prefix, `MARKERS`, the `PromptOptimizeMode` union, one en
 **Tested** `npm run check` (tsc, i18n, exports, prettier), `npx vitest run`, `npm run build`. A scan for
 CJK in `frontend/src` outside the two dictionaries reports those 60 lines and nothing else.
 
-**Where** `frontend/src/lib/canvas/agent-references.ts`, `node-title.ts`,
+**Where** `frontend/src/lib/canvas/agent-references.ts`,
 `frontend/src/components/canvas/sent-prompt-disclosure.tsx`,
 `frontend/src/stores/use-config-store.ts`, `frontend/src/components/canvas/canvas-agent-panel.tsx`.
 
@@ -6621,7 +6321,7 @@ of its two blockers is already gone: nothing is written into the bundle any more
 `immutable`, `config.js` and the page are `no-store`, a missing asset and an unknown `/api/*` path stay 404
 JSON, no bundle means the old 404, and no request serves a file outside the bundle), the two first-paint
 tests (an address when `PUBLIC_BASE_URL` names one, none when the gateway serves the canvas),
-`frontend/tests/gateway-origin.test.ts` (the page's origin is the answer in a browser, a named address
+`frontend/tests/server-origin.test.ts` (the page's origin is the answer in a browser, a named address
 wins over it, loopback outside one), `go test ./internal/...`, `npm run check`, `npx vitest run`,
 `npm run build`. Smoke-tested by hand: the gateway
 served the built bundle on a spare port and answered `/`, `/canvas/<id>`, `/assets/*`, `/config.js` and
@@ -7022,7 +6722,7 @@ exercised in a browser: the four gestures (drop, paste, menu picker, and the but
 were read, not clicked.
 
 **Where** `frontend/src/pages/canvas/hooks/use-content-ingress.ts`,
-`frontend/src/components/canvas/canvas-node-hover-toolbar.tsx`,
+`frontend/src/components/canvas/canvas-node-toolbar.tsx`,
 `frontend/src/components/canvas/canvas-image-toolbar-tools.tsx`,
 `frontend/src/pages/canvas/project.tsx`, `frontend/src/i18n/locales/{en-US,zh-CN}.ts`.
 
@@ -7283,7 +6983,7 @@ sound alike.
 
 **Where** `frontend/src/types/canvas.ts`, `frontend/src/lib/canvas/canvas-generation-helpers.ts`,
 `frontend/src/services/api/{runs,video}.ts`, `frontend/src/pages/canvas/{project.tsx,hooks/use-generation-runs.ts}`,
-`frontend/src/components/canvas/canvas-node-hover-toolbar.tsx`,
+`frontend/src/components/canvas/canvas-node-toolbar.tsx`,
 `frontend/src/i18n/locales/{en-US,zh-CN}.ts`,
 `frontend/tests/{canvas-resumable-runs,api-runs,api-video-runs,model-selection}.test.ts`.
 
@@ -7501,10 +7201,10 @@ a migration path for a thing that has never been released is a permanent second 
 front. This is also why the on-disk agent directory moves rather than being read from both places.
 
 **What was renamed, mechanically** 81 Go files, 78 frontend files, 8 moved files
-(`cmd/comfyui-gateway` → `cmd/comfyloft-server`, `docs/gateway.md` → `docs/server.md`,
-`services/api/gateway-status.ts` → `server-status.ts`, `lib/gateway-{labels,models}.ts` → `server-*.ts`,
-`hooks/use-local-gateway-sync.ts` → `use-local-server-sync.ts`,
-`components/layout/gateway-reconnect-banner.tsx` → `server-reconnect-banner.tsx`, and two test files). Go
+(`cmd/comfyui-gateway` → `cmd/comfyloft-server`, `docs/server.md` → `docs/server.md`,
+`services/api/server-status.ts` → `server-status.ts`, `lib/gateway-{labels,models}.ts` → `server-*.ts`,
+`hooks/use-local-server-sync.ts` → `use-local-server-sync.ts`,
+`components/layout/server-reconnect-banner.tsx` → `server-reconnect-banner.tsx`, and two test files). Go
 identifiers went with the rest: `cfg.GatewayHost` → `cfg.ServerHost`, `newTestGateway` → `newTestServer`,
 `LOCAL_GATEWAY_URL` → `LOCAL_SERVER_URL` (the wire name in `config.js` too — one rename, both sides), and a
 handful of locals that collided with the new name were given their own rather than a number.
@@ -7515,7 +7215,7 @@ protocol's name for a status, not this program's name. `GATEWAY_TOKEN` survives 
 that describe a token that no longer exists. No prose in `docs/decisions.md` before this entry was rewritten:
 the log records what was decided and in which words, and rewriting "the gateway" out of #1–#239 would be
 editing the past to look consistent. What *was* rewritten there is anything a reader follows — the ten
-`comfyui-gateway` paths, the `docs/gateway.md` links and the `GATEWAY_*` variable names — because a pointer to
+`comfyui-gateway` paths, the `docs/server.md` links and the `GATEWAY_*` variable names — because a pointer to
 a file that no longer exists makes the whole log unfollowable .
 
 **Tested** `make check` (19 packages; five test functions needed their two `startMCPServer` results
@@ -7729,11 +7429,11 @@ the section asks the server once when it opens.
 (`server.models.*.label`, `server.variants.*`) were reported as "only in zh-CN" and the gate exited 1 — with
 the summary line `failed: 0 dead key(s), 0 missing key(s)` printed just above it, which is how it went
 unnoticed: the counts read clean and the exit code was not looked at. `check-exports.cjs` still had its
-`TEST_ONLY` reason keyed to `src/lib/gateway-models.ts:modelsOf`, which the rename had moved to
+`TEST_ONLY` reason keyed to `src/lib/server-models.ts:modelsOf`, which the rename had moved to
 `frontend/src/lib/server-models.ts`, so the same run reported that export as having only a test's caller. Both are
 strings in scripts that nothing compiles, and the only thing that can catch them is running the gates —
 which is the whole reason `npm run check` is a gate. Fixed, and the two comments that still said
-`lib/gateway-labels.ts` now name `frontend/src/lib/server-labels.ts`.
+`lib/server-labels.ts` now name `frontend/src/lib/server-labels.ts`.
 
 **An error with nothing to say rendered as an empty message.** `httpx.WriteError` opened with
 `message := "Internal error"` and then assigned it on both branches, so `ineffassign` flagged the literal as
@@ -7813,7 +7513,7 @@ the list and every pid is gone. The test double gained the real agent's answer t
 patience because the double spoke one frame fewer than the real thing. Verified against the real binary by
 stopping the server: the agent exits on the frame, logging a clean `exit pid=… err=<nil>`.
 
-**Where** `internal/agent/{spawn.go,sessions.go}` (+`release_test.go`, `session_test.go`'s `fakeAgent`),
+**Where** `internal/agent/{spawn.go,sessions.go}` (+`internal/agent/release_test.go`, `internal/agent/session_test.go`'s `fakeAgent`),
 `internal/server/server.go`, `docs/known-issues.md`.
 
 **Superseded in part by #250**: the release is end of input and then a kill, and `quit` is not on that path.
@@ -7875,7 +7575,7 @@ fills every field and shows a block as indented JSON, `null` is sent for a clear
 an object". Verified live against the real agent's startup frame, above. `make check` 19 packages, `npx vitest
 run` 330, `npm run check` (853 zh / 839 en), `npm run build` 560.88 kB.
 
-**Where** `internal/agent/{events.go,models.go}` (+`models_test.go`), `frontend/src/services/api/agent.ts`,
+**Where** `internal/agent/{events.go,models.go}` (+`internal/agent/models_test.go`), `frontend/src/services/api/agent.ts`,
 `frontend/src/lib/agent-models.ts`, `frontend/src/components/settings/agent-model-dialog.tsx`,
 `frontend/tests/agent-models.test.ts`, `frontend/scripts/check-i18n.cjs` (two hand-resolved keys),
 `frontend/src/i18n/locales/{zh-CN,en-US}.ts`.
@@ -7912,7 +7612,7 @@ and `Release` returns within the wait plus the kill; `CloseAll` releases both of
 alive. The test double dropped the `quit` answer it had gained in #248, since nothing sends that frame now —
 and the package's tests went from 3.9 s to 1.5 s with it.
 
-**Where** `internal/agent/spawn.go` (+`release_test.go`, `session_test.go`), `docs/decisions.md` #248.
+**Where** `internal/agent/spawn.go` (+`internal/agent/release_test.go`, `internal/agent/session_test.go`), `docs/decisions.md` #248.
 
 
 ## 251. A dictation gesture stops itself at a minute
@@ -7997,11 +7697,11 @@ rather than deleted (a credential is not this process's to remove) and the log s
 **Where** `internal/store/speech.go`, `internal/util/util.go` (`WriteFileAtomicMode`),
 `internal/server/routes_speech.go`, `frontend/src/services/api/speech.ts`, `frontend/src/lib/speech-profiles.ts`,
 `frontend/src/components/settings/speech-profile{s-section,-dialog}.tsx`, `frontend/src/stores/use-config-store.ts`.
-Tests: `routes_speech_test.go` (the recording goes to the active profile, the profile's model and bearer win over the
+Tests: `internal/server/routes_speech_test.go` (the recording goes to the active profile, the profile's model and bearer win over the
 form's, a blank model sends nothing, no profile is a 400, 401/413/429 pass through while 500 becomes 502,
 `speech.json` is `0600` and never in an answer, a keyless entry keeps the stored key and `""` removes it, every bad
-id is a 400 that leaves the list untouched), `store_test.go` (a hand-edited file with colliding, missing and unusable
-entries loads as distinct usable ids), `api-speech.test.ts`, `speech-profiles.test.ts`.
+id is a 400 that leaves the list untouched), `internal/store/store_test.go` (a hand-edited file with colliding, missing and unusable
+entries loads as distinct usable ids), `frontend/tests/api-speech.test.ts`, `frontend/tests/speech-profiles.test.ts`.
 
 
 ## 253. Twelve Go exports nothing could reach are gone, and a gate says so from now on
@@ -8096,7 +7796,7 @@ are the bytes, a second write replaces the document and leaves the directory hol
 `0644`, and a temporary file in the shape the writer produces is what `SweepTempFiles` collects — with an ordinary
 file beside it untouched. `make check` 20 packages including the new dead-export gate, `npx vitest run` 343.
 
-**Where** `internal/util/util.go` (+`util_test.go`), `internal/canvas/canvas.go`, `internal/settings/settings.go`,
+**Where** `internal/util/util.go` (+`internal/util/util_test.go`), `internal/canvas/canvas.go`, `internal/settings/settings.go`,
 `internal/server/{runtime_config,agent_config}.go`.
 
 
@@ -8239,8 +7939,8 @@ prettier + tsc), `npm run build` 561.56 kB. The deleted files: `prompt-optimize-
 **Where** `frontend/src/components/canvas/canvas-node-prompt-panel.tsx`,
 `frontend/src/components/canvas/sent-prompt-disclosure.tsx` (a comment only, see #258),
 `frontend/src/lib/canvas/node-generation-facts.ts`, `frontend/src/lib/canvas/canvas-agent-tools.ts`,
-`frontend/src/services/api/prompts.ts`, `frontend/src/stores/use-config-store.ts`, `frontend/src/types/canvas.ts`,
-`frontend/src/i18n/locales/{zh-CN,en-US}.ts`, `frontend/tests/{api-prompts,canvas-agent-tools,node-generation-facts}.test.ts`,
+`frontend/src/stores/use-config-store.ts`, `frontend/src/types/canvas.ts`,
+`frontend/src/i18n/locales/{zh-CN,en-US}.ts`, `frontend/tests/{canvas-agent-tools,node-generation-facts}.test.ts`,
 `docs/server.md` (two paragraphs that still described `internal/prompt` as the home of the H3 instructions).
 
 
@@ -8302,7 +8002,7 @@ behaves the same way). The panel and `buildGenerationConfig` read `metadata.seco
 `videoSeconds`, so an audio length lands in `videoSeconds` too and vice versa — each is only read by the kind of node
 that owns it.
 
-**Where** `frontend/src/components/settings/audio-settings-panel.tsx`,
+**Where** `frontend/src/components/audio-settings-panel.tsx`,
 `frontend/src/lib/canvas/{server-models.ts,build-generation-config.ts}`,
 `frontend/src/services/api/audio.ts`, `frontend/tests/{audio-duration,server-models}.test.ts`.
 
@@ -8513,7 +8213,7 @@ the rule it now follows is a field on the definition rather than arithmetic in t
 **Where** `frontend/src/types/{canvas,canvas-node}.ts`, `frontend/src/components/canvas/canvas-node.tsx`,
 `frontend/src/components/canvas/nodes/builtin-nodes.tsx`,
 `frontend/src/components/canvas/canvas-image-toolbar-tools.tsx`,
-`frontend/src/components/canvas/canvas-node-hover-toolbar.tsx`, `frontend/src/pages/canvas/project.tsx`,
+`frontend/src/components/canvas/canvas-node-toolbar.tsx`, `frontend/src/pages/canvas/project.tsx`,
 `frontend/src/i18n/locales/{en-US,zh-CN}.ts`.
 
 
@@ -8681,7 +8381,7 @@ browser: the labels are text in two components, and what could break is a missin
 registry's English exactly as before.
 
 **Where** `frontend/src/lib/server-labels.ts`, `frontend/src/components/canvas/canvas-tool-node-panel.tsx`,
-`frontend/src/components/canvas/canvas-node-super-resolve-dialog.tsx`, `frontend/src/i18n/locales/zh-CN.ts`,
+`frontend/src/components/canvas/canvas-tool-node-panel.tsx`, `frontend/src/i18n/locales/zh-CN.ts`,
 `frontend/scripts/check-i18n.cjs`.
 
 
@@ -8763,7 +8463,7 @@ keeps the layout, which is one more reason the pseudo mode cannot be read from t
 layout. The first of those fails against #267's line, which is what makes it a regression test rather than a
 description. `npx tsc --noEmit`, `npm run check` (886/853, 183 modules), `npm run build`.
 
-**Where** `frontend/src/services/api/image.ts`, `frontend/tests/api-image-upscale.test.ts`.
+**Where** `frontend/src/services/api/image.ts`, `frontend/tests/api-image-runs.test.ts`.
 
 
 ## 272. What the browser said
@@ -8958,7 +8658,7 @@ it), `make check`, `npx tsc --noEmit`, `npm run check` (189 modules), `npx vites
 `negative` only for `image-qwen21` (all four variant contracts) and the three MOSS workflows, and for none of
 Z-Image, ESREGAN, the angle workflow, the four H3 ones, RIFE or the music one.
 
-**Where** `internal/workflow/inputs.go`, `internal/workflow/shipped_negative_test.go`.
+**Where** `internal/workflow/inputs.go`.
 
 
 ## 276. A server built in a test is closed in that test
@@ -9734,7 +9434,7 @@ collapse (and `components/kit/nav.tsx`, whose `Collapse` was its only user), the
 `没有可用的超分工作流`.
 
 **Why** Two buttons ran one graph. They were two things when they were written: 放大 was a *browser-side*
-resize (the initial import's `canvas-node-upscale-dialog.tsx`, `resolveUpscaleSize`, high/bilinear/nearest, no
+resize (the initial import's `use-image-editors.ts`, `resolveUpscaleSize`, high/bilinear/nearest, no
 request at all) and 超分 was the SeedVR2 graph, whose own knobs were `dit_model` and a target short edge. #65
 turned 放大 into a run of `image-esrgan-upscale` and pinned it with `preferredWorkflowId`, so from then on it
 borrowed the super-resolution dialog; #64 deleted `image-seedvr2-upscale` ("no caller left") and the video
@@ -9757,9 +9457,9 @@ boolean branch of the deleted parameter form; exports: `Collapse` and `WorkflowP
 `image-esrgan-upscale` was read again for the dialog's data: one `select` parameter, three files, no
 `resolution`.
 
-**Where** `frontend/src/components/canvas/canvas-node-upscale-dialog.tsx` (new; replaces
-`canvas-node-super-resolve-dialog.tsx`), `canvas-image-toolbar-tools.tsx`, `canvas-node-hover-toolbar.tsx`,
-`pages/canvas/project.tsx`, `pages/canvas/hooks/use-image-editors.ts` (`upscaleImageNode`),
+**Where** `frontend/src/pages/canvas/hooks/use-image-editors.ts` (`upscaleImageNode`),
+`frontend/src/components/canvas/canvas-image-toolbar-tools.tsx`, `frontend/src/components/canvas/canvas-tool-node-panel.tsx`,
+`frontend/src/components/canvas/canvas-node-toolbar.tsx`,
 `i18n/locales/{zh-CN,en-US}.ts` (`canvas.upscale.*`).
 
 ## 296. The image toolbar does not offer to copy a prompt
@@ -9785,7 +9485,7 @@ only once the hook went, which is how the last caller of a string surfaces; `npx
 (`IMAGE_QUICK_TOOLS_STORAGE_KEY`), so a stored `copyPrompt` is ignored rather than leaving a hole in the bar.
 
 **Where** `frontend/src/components/canvas/canvas-image-toolbar-tools.tsx`,
-`frontend/src/components/canvas/canvas-node-hover-toolbar.tsx`, `frontend/src/hooks/use-copy-text.ts`,
+`frontend/src/components/canvas/canvas-node-toolbar.tsx`,
 `frontend/src/i18n/locales/{zh-CN,en-US}.ts`, `frontend/package.json`.
 
 ## 297. Material is not a generator, and nothing can make it one
@@ -9962,7 +9662,7 @@ tooltip, which is where the decision is made.
 
 **Tested** `frontend/tests/step-node-metadata.test.ts` (6th case): the node a button creates names the workflow,
 carries no params so the workflow's own declaration decides, and is a generator with no content — which is what
-puts the step panel in front of the user with a live send button. `frontend/tests/api-image-upscale.test.ts`
+puts the step panel in front of the user with a live send button. `frontend/tests/api-image-runs.test.ts`
 became `api-image-runs.test.ts` with the four `requestUpscale` cases deleted; the step, angle, layout and stale-knob
 cases it also held stay, because those go through `requestEdit`. `api-video-runs.test.ts` lost its
 `createVideoInterpolateTask` case. `npx tsc --noEmit`, `npm run check` (i18n at 833 keys), `npx vitest run` (427),
@@ -9970,7 +9670,6 @@ cases it also held stay, because those go through `requestEdit`. `api-video-runs
 
 **Where** `frontend/src/pages/canvas/hooks/use-image-editors.ts`, `frontend/src/pages/canvas/hooks/use-video-editors.ts`,
 `frontend/src/pages/canvas/project.tsx`, `frontend/src/services/api/{image,video}.ts`,
-`frontend/src/components/canvas/canvas-node-upscale-dialog.tsx` (deleted),
 `frontend/src/i18n/locales/{zh-CN,en-US}.ts`.
 
 ## 302. Every request key is one the workflow reads
@@ -10793,14 +10492,14 @@ and the four assertions that read titles were rewritten around what a node actua
 `go test ./internal/server/`.
 
 **Where** `frontend/src/types/canvas.ts`, `frontend/src/constant/canvas.ts`, `frontend/src/lib/canvas/{node-registry,canvas-node-factory,canvas-document,canvas-agent-view,node-prompt-field,canvas-export,canvas-resource-references}.ts`,
-`frontend/src/components/canvas/{canvas-node,canvas-create-menus,canvas-side-panel-elements,canvas-node-hover-toolbar,canvas-node-reference-bar,canvas-agent-panel,canvas-node-generation,nodes/builtin-nodes}.tsx`,
+`frontend/src/components/canvas/{canvas-node,canvas-create-menus,canvas-side-panel-elements,canvas-node-toolbar,canvas-node-reference-bar,canvas-agent-panel,canvas-node-generation,nodes/builtin-nodes}.tsx`,
 `frontend/src/pages/canvas/{project.tsx,hooks/use-content-ingress.ts,hooks/use-image-editors.ts}`,
-`frontend/src/i18n/locales/{zh-CN,en-US}.ts`, `frontend/src/lib/canvas/node-title.ts` (deleted).
+`frontend/src/i18n/locales/{zh-CN,en-US}.ts` (the `title` keys are gone with the field).
 
 ## 322. A key column is sized by its own words, never by a number
 
 **Decision** The node information panel's keys are one grid column for the whole panel, sized `max-content`
-(`grid-cols-[max-content_minmax(0,1fr)]` in `canvas-node-hover-toolbar.tsx`), and `InfoRow` returns the key and
+(`grid-cols-[max-content_minmax(0,1fr)]` in `canvas-node-toolbar.tsx`), and `InfoRow` returns the key and
 the value as two cells of that grid rather than being a grid of its own. The value column is `minmax(0,1fr)` and
 keeps `break-words`: a prompt gives way when the panel is narrow, a key never does.
 
@@ -10826,7 +10525,7 @@ line, values starting at one x, the prompt wrapping inside the value column. The
 DOM, so a column width is nothing a test here can see, and the app itself has not been opened: what is verified is
 the rule and the CSS, not the running page.
 
-**Where** `frontend/src/components/canvas/canvas-node-hover-toolbar.tsx` (`CanvasNodeInfoModal`, `InfoRow`).
+**Where** `frontend/src/components/canvas/canvas-node-toolbar.tsx` (`CanvasNodeInfoModal`, `InfoRow`).
 
 ## 323. A film's frames are pictures, and a picture is a node
 
@@ -11158,7 +10857,7 @@ mask node binding that same file. Nothing outside the mask moved in either run. 
 are gone, and the material hint no longer names a card tool that does not exist), `npm run build` (585.89 kB).
 
 **Where** `frontend/src/components/canvas/canvas-image-toolbar-tools.tsx` (the missing definition, and the note
-saying why), `frontend/src/components/canvas/canvas-node-hover-toolbar.tsx`,
+saying why), `frontend/src/components/canvas/canvas-node-toolbar.tsx`,
 `frontend/src/pages/canvas/project.tsx`, `frontend/src/pages/canvas/hooks/use-image-editors.ts` (`maskEditImageNode`
 sends one payload), `frontend/src/i18n/locales/{en-US,zh-CN}.ts` (`canvas.imageTools.mask*` and
 `canvas.runtime.maskPrompt` removed, `canvas.runtime.materialHint` corrected).
@@ -11199,7 +10898,7 @@ toolbar offered only Info / Delete, and the picture card's toolbar was unchanged
 multi-angle / view image / more), its own view still opening the picture. `npx vitest run` (598),
 `npx tsc --noEmit`, `npm run check` (841/808 keys, 190 modules), `npm run build` (586.19 kB).
 
-**Where** `frontend/src/components/canvas/canvas-node-hover-toolbar.tsx` (the `viewVideo` entry, `onViewImage` →
+**Where** `frontend/src/components/canvas/canvas-node-toolbar.tsx` (the `viewVideo` entry, `onViewImage` →
 `onView`), `frontend/src/pages/canvas/project.tsx` (`onView={handleNodePreview}`),
 `frontend/src/components/canvas/canvas-node.tsx` (the `VideoNodeContent` note saying the gesture is a shortcut),
 `frontend/src/i18n/locales/{en-US,zh-CN}.ts` (`canvas.nodeToolbar.viewVideo`, `viewVideoTitle`).
@@ -11248,14 +10947,14 @@ the browser's download directory); Crop on the bar still opened the crop dialog;
 selected card (toast "Deleted txt", undo offered). `npx vitest run` (598), `npx tsc --noEmit`, `npm run check`
 (828/795 keys, 187 modules), `npm run build` (575.92 kB — down from 586.19).
 
-**Where** `frontend/src/components/canvas/canvas-node-hover-toolbar.tsx` (the type-gated tool list, no state, no
+**Where** `frontend/src/components/canvas/canvas-node-toolbar.tsx` (the type-gated tool list, no state, no
 settings), `frontend/src/components/canvas/canvas-context-menu.tsx` (info and download added, all node rows behind
 `menu.type === "node"`, a divider before the delete), `frontend/src/components/canvas/canvas-image-toolbar-tools.tsx`
 (the five definitions, the configuration layer gone), `frontend/src/pages/canvas/project.tsx` (`toolbarNodeId`,
 `keepNodeToolbar`, `hideNodeToolbar` and their five resets gone; `onInfo`/`onDownload`/`canDownload` wired into the
 menu), `frontend/src/i18n/locales/{en-US,zh-CN}.ts` (the eight `imageTools.*` configuration strings and the five
 bar-only `nodeToolbar.*` tooltips gone). Deleted: `canvas-image-toolbar-settings-modal.tsx`, and the kit components
-only it used — `kit/card.tsx`, `kit/text.tsx`, `Space` in `kit/display.tsx`.
+only it used — `kit/card.tsx`, `kit/text.tsx`, `Space` in `frontend/src/components/kit/display.tsx`.
 
 
 ## 333. A clip's frame grabs are a button on its bar, not entries in the menu
@@ -11293,7 +10992,7 @@ Delete with no frame entries left; a press elsewhere closed the popover. The thr
 zoomed screenshot: marker left, marker right, markers both sides. `npx vitest run` (598), `npx tsc --noEmit`,
 `npm run check` (830/797 keys, 187 modules), `npm run build` (577.10 kB).
 
-**Where** `frontend/src/components/canvas/canvas-node-hover-toolbar.tsx` (`ToolbarTool.menu`, the popover in
+**Where** `frontend/src/components/canvas/canvas-node-toolbar.tsx` (`ToolbarTool.menu`, the popover in
 `ToolbarAction`, the `captureFrame` button and its three items), `frontend/src/components/canvas/canvas-context-menu.tsx`
 (the frame block, `canCaptureVideoFrame` and `onCaptureVideoFrame` gone), `frontend/src/pages/canvas/project.tsx`
 (`onCaptureVideoFrame` wired to the bar), `frontend/src/i18n/locales/{en-US,zh-CN}.ts`
@@ -11421,7 +11120,7 @@ size / Increase font size. `npx vitest run` (602 in 52 files), `npx tsc --noEmit
 
 **Where** `frontend/src/lib/canvas/canvas-agent-tools.ts` (the wrapped return), `internal/server/routes_mcp.go`
 (`ungroup_nodes`, `capture_frame`, `create_node`'s enum and its description), `internal/server/agent_instructions.go`
-(the group paragraph), `frontend/src/components/canvas/canvas-node-hover-toolbar.tsx` (the two font labels, the
+(the group paragraph), `frontend/src/components/canvas/canvas-node-toolbar.tsx` (the two font labels, the
 `active` class, `extraTools`), `frontend/src/components/canvas/canvas-image-toolbar-tools.tsx` (the definition type,
 `buildImageToolbarTools`), `frontend/src/types/canvas-node.ts` (`CanvasNodeToolbarItem` gone), the two dictionaries,
 and the four tests named above.
@@ -11514,7 +11213,7 @@ selection bar's Group still wrapped two cards. `npx vitest run` (612), `npx tsc 
 keys, 189 modules).
 
 **Where** `frontend/src/components/canvas/canvas-bar.tsx`,
-`frontend/src/components/canvas/canvas-node-toolbar.tsx` (was `canvas-node-hover-toolbar.tsx`),
+`frontend/src/components/canvas/canvas-node-toolbar.tsx` (was `canvas-node-toolbar.tsx`),
 `frontend/src/components/canvas/canvas-node-info-modal.tsx` (new, moved out of it),
 `frontend/src/components/canvas/canvas-selection-toolbar.tsx`, `frontend/src/pages/canvas/project.tsx` (two
 imports).
@@ -11625,6 +11324,7 @@ entry (RIFE on a silent clip) was re-checked against `workflows/video-rife.json`
 **Where** `docs/decisions.md`, `docs/known-issues.md`, `frontend/scripts/check-decisions.cjs` (it now reads the
 record too), `frontend/package.json` (`check:decisions` in `check`).
 
+
 ## 342. The wait is the turn's, and the agent is the one who says it began
 
 **Decision** `Working… Ns` counts the turn in flight, and a turn is what the agent says it is. AlayaCore
@@ -11710,3 +11410,87 @@ observation and on `turnStartedAt`'s three cases.
 `frontend/src/components/canvas/canvas-agent-panel.tsx` (the `turn` state, the tick, the error branch),
 `frontend/src/services/api/agent.ts`, `frontend/src/i18n/locales/{en-US,zh-CN}.ts` (`canvas.agent.workingHint` — it
 said the seconds were counted here), `frontend/tests/agent-transcript.test.ts`.
+
+## 343. The gateway sends and echoes; what it keeps is what the agent cannot say twice
+
+**Decision** AlayaCore is a mature agent, so `internal/agent` is a relay with a mailbox. A message goes out as
+the wire's own content items and a flush (`UX`…, `UE`), and what comes back is relayed as the frames it arrived
+as — no translation of a message into "a turn started", no summary of a step into a status. The state this side
+may hold is of exactly two kinds: (1) what the agent has said and will not say again — the conversation's frames
+(`transcript`: a process replays its session file only when it starts, and says the rest once), its startup
+broadcast and its later statements about itself (`startup`: models, active model, level, usage), and the raw model
+entries `model_sync` has to round-trip because a canvas cannot see their keys; (2) routing for one socket or one
+tool call (`sink`, `watchGeneration`, `pending`). Everything else is a fact the agent owns, and the session reads
+it off the frame that says it: the turn in flight off `task` (#342), the model list off `model_list`, a failure off
+`error`. The session may *timestamp* what the agent announced — the age of a turn is its own measurement of an
+announcement — but it may not decide what the announcement would have been.
+
+**The test, for the next thing** Two questions, in order: does the agent say it, and will it say it again? Said and
+repeatable — keep nothing, ask again. Said once — cache it, and write down why it cannot be said twice. Not said —
+then it is not available, and the answer is a frame or a field on one (as `elapsedMs` is for the age of a turn), not
+a value this side computes because it seemed equivalent.
+
+**Why** A duplicate of the agent's state is a second truth that only the agent can correct, and the correction is
+invisible until it is wrong. `busy` meant "we wrote a prompt, so a turn is running", and it was wrong about a
+message of pictures and no words, a message of spaces, a message the agent refused, and a task a command started —
+four cases, each found and paid for separately before the flag was made to follow the agent's own frame (#342).
+None of those cases was hard; what was hard was that a local guess has no failure signal of its own. The same rule
+says where a missing capability belongs: a page that wants to know something the wire does not carry is asking for
+a frame, not for a timer.
+
+**Cost** The canvas cannot be optimistic about the agent's *state*, only about its own: the working row is drawn
+from the send (#289) while the session's flag waits for the task frame, one round trip later. And the gateway has
+one fewer place to put a convenience — a field on a frame, a comment beside a `switch`, or nothing.
+
+**Rejected** Mirroring the agent's state so a page need not ask: what `startup` does is cache statements, and a
+model of the agent is a different thing — it is what `busy` was. A heartbeat, so the page can learn what it can
+already derive (#342). A timer to end a turn the agent has not ended: only the agent can end a turn, and if it does
+not, the answer is to find out why rather than to guess on its behalf.
+
+**Where** `internal/agent/{sessions,run,history,events,spawn}.go`; the rule made concrete in #342; and the
+architecture note in `docs/server.md` that states it for the next reader.
+
+## 344. The record's pointers point at files that exist
+
+**Decision** A pass over the record and the four prose documents. Six entries whose subject is verifiably gone
+left: the model call scripts, the persisted stores' recovery and their version, the prompt route, the bundled VAE
+payload — and the three sentences that cited them now say the thing instead of naming a number. Every file pointer in a `**Where**` section was then resolved against the tree:
+seventy-two occurrences of sixteen names were pointed at today's files (`routes_video.go` →
+`routes_generation.go`, `resources/index.json` → `resources.json`, `gateway-*` → `server-*`,
+`use-local-gateway-sync.ts` → `use-local-server-sync.ts`, the hover toolbar → the node toolbar,
+`canvas-node-super-resolve-dialog.tsx` → the tool node panel), forty paths still written in the old shorthand
+(`canvas/web/src/…`, `components/…`, a bare `agent-transcript.ts`) were rewritten to the file they name today, and
+seventeen `Where` lists were corrected by hand: `postprocess.go`, `catalogue.go`, `node-title.ts`,
+`canvas-manager-dialog.tsx` and `prompts.ts` are gone, so the entries that named them no longer do.
+
+**What is deliberately not touched** An entry that records a *removal* names where the thing was: `canvas/plugins/**`
+in #148, `resources/payload/**` in #117, `stores/use-storage-recovery-store.ts` in #46's prose. Rewriting those to
+today's paths would make the sentence describe the wrong moment, and deleting them would lose the only record of
+what was taken out and why. Prose keeps its old names wherever it is describing an old state; only the pointers are
+held to the tree. What is not allowed is a *live* entry pointing at a file that is not there, and after this pass
+none does: every pointer that begins in this tree's layout (`internal/`, `frontend/`, `cmd/`, `workflows/`,
+`tools/`, `scripts/`, `docs/`) resolves to something that exists, checked with brace and glob expansion
+(`internal/workflow/{inputs,bindings}.go`, `frontend/src/i18n/locales/*.ts`).
+
+**Why** A pointer a reader follows to nothing is worse than no pointer at all: it reads as "the rule is recorded
+somewhere and this file has moved", so the reader goes looking for a rule instead of reading the one in front of
+them. A `Where` is the one part of an entry that makes a claim about the *tree*, and it is the part that rots
+silently — no gate sees a path.
+
+**Cost** Six numbers are now holes, which is acceptable only because nothing cites them: `check:decisions` reads the record as well as the code. The pass was a script plus judgement: the script
+resolved what was mechanically resolvable, and each of the six entries was checked by hand against the tree — its
+subject had no file, symbol or endpoint left.
+
+**Rejected** Renumbering to close the holes: numbers are addresses, and sixty-odd citations would break to save a
+reader the sight of a gap (#341). Deleting every entry whose `Where` names a path that is gone: in a removal entry
+that path is the subject. A gate for `Where` paths: it would need waivers for AlayaCore's own `internal/…` files
+(two entries cite them) and for runtime directories (`canvas.json`, `mcp.conf`, `model.conf`), and a gate that a
+later reader switches off is worse than the pass it replaces. `check:decisions` keeps the citations honest, and
+this entry keeps the rule for the pointers.
+
+**Tested** `node frontend/scripts/check-decisions.cjs` (308 entries, every `#N` cited in prose answers to one),
+`npm run check`, `make check`, `npx vitest run` (618), `npm run build` (576.91 kB). The pass's last check was run
+against the result: no pointer in a current-layout `Where` fails to resolve with braces and globs expanded, and the
+six removed numbers are cited by nothing.
+
+**Where** `docs/decisions.md`, `docs/server.md`.
