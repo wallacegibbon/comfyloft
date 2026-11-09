@@ -63,6 +63,7 @@ while IFS= read -r line; do
     UX*slow*)
       printf '%s\n' "$line"
       if [ -n "$SESSION" ]; then printf '%s\n' "$line" >> "$SESSION"; fi
+      SLOW=1
       printf 'SM{"type":"task","data":{"in_progress":true}}\n'
       printf 'SM{"type":"steering","data":{"phase":"queued","text":"one more"}}\n'
       sleep 2
@@ -70,6 +71,7 @@ while IFS= read -r line; do
       printf 'SM{"type":"task","data":{"in_progress":false}}\n' ;;
     UX*'[comfyloft]'*)
       printf '%s\n' "$line"
+      NOTICE=1
       printf 'SM{"type":"task","data":{"in_progress":true}}\n'
       printf 'Ax{"id":"2","type":"text","text":"carrying on"}\n'
       printf 'SM{"type":"task","data":{"in_progress":false}}\n' ;;
@@ -77,6 +79,15 @@ while IFS= read -r line; do
       printf '%s\n' "$line"
       if [ -n "$SESSION" ]; then printf '%s\n' "$line" >> "$SESSION"; fi ;;
     UE)
+      # A flush that ends a prompt some other branch has already answered is not a second prompt: those
+      # branches set a flag, and without this the generic answer below ran as a turn of its own right behind
+      # the scripted one — which is how a delete issued on the end of a turn could find the agent busy again
+      # (the flaky half of TestDeletingABusySessionIsRefused). SUMMARIZE answers at flush time, so it is not
+      # one of them.
+      if [ -n "$SLOW" ] || [ -n "$NOTICE" ]; then
+        SLOW=""; NOTICE=""
+        continue
+      fi
       if [ -n "$SUMMARIZE" ]; then
         printf 'SM{"type":"notify","data":{"text":"Summarizing conversation..."}}\n'
         printf 'SM{"type":"task","data":{"in_progress":true}}\n'
