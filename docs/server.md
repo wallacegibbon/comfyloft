@@ -260,9 +260,12 @@ which is the one thing a result adds to the step the canvas has already drawn (d
 
 `usage` is SM `task`'s telemetry — `context_tokens`, `step_tps` and `ttft_ms`: how full the context is, and
 how fast the last step went with the wait for its first token. The numbers are the agent's measurements,
-relayed as it restates them and never computed here; `models` carries the same three when the agent restored
-a count from a session file at startup, so a reloaded panel knows the context before it asks anything
-(decisions #224).
+relayed as it restates them and never computed here. The session also keeps the last three it heard, and
+`models` carries them to a page that connects — the count restored from a session file at startup and then
+every restatement since, a summarize included — so a reloaded panel knows the context before it asks
+anything. It is kept on the session rather than on the page because a reload replaces the page and not the
+process (decisions #224, #346). The active model's `contextLimit` on that frame comes out of the model list
+when the list names the model, because the limit is the entry's and an editor can rewrite it (#347).
 
 `done` marks the end of a turn and carries the elapsed time only: the answer is what the deltas built,
 and a second copy of it would be a second truth.

@@ -90,3 +90,34 @@ func TestDestinationNamesTheAddressTheActiveModelIsSentTo(t *testing.T) {
 		t.Errorf("destination = %q, want it to say the entry is missing", where)
 	}
 }
+
+// The active model's limit comes out of the list, because the list is what an editor rewrites: `model_sync`
+// restates it, and the `model` frame that named the active model is not sent again — to this session or to any
+// other one. A limit copied out of that frame is a denominator nobody can correct, and the panel would keep
+// drawing `22K/262144` for a model that now holds half of it (#347).
+func TestTheActiveModelsLimitIsTheLists(t *testing.T) {
+	state := startup{}
+	state.collect("model_list", json.RawMessage(`{"models":[{"id":1,"name":"one","context_limit":1000}]}`))
+	state.collect("model", json.RawMessage(`{"active_id":1,"active_name":"one","context_limit":1000}`))
+	if got := state.event().Active.ContextLimit; got != 1000 {
+		t.Fatalf("limit = %d, want the one the model frame stated", got)
+	}
+
+	// The file was edited and the agent restated the list; the model frame was not sent again.
+	state.collect("model_list", json.RawMessage(`{"models":[{"id":1,"name":"one","context_limit":5000}]}`))
+	if got := state.event().Active.ContextLimit; got != 5000 {
+		t.Errorf("limit = %d after the list was restated, want 5000", got)
+	}
+	// What the agent said about which model this is stays what it said: the derived value is a copy, so a
+	// state read twice cannot depend on what a page was told once.
+	if got := state.active.ContextLimit; got != 1000 {
+		t.Errorf("state.active was rewritten to %d; the frame stated 1000", got)
+	}
+
+	// A list that does not name the active model leaves the stated limit standing: it is the only account of
+	// it there is.
+	state.collect("model", json.RawMessage(`{"active_id":9,"active_name":"gone","context_limit":2000}`))
+	if got := state.event().Active.ContextLimit; got != 2000 {
+		t.Errorf("limit = %d for an active model its list does not name, want 2000", got)
+	}
+}

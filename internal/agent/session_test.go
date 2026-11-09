@@ -352,6 +352,51 @@ func TestSessionRelaysTheContextAndTheStepSpeed(t *testing.T) {
 	}
 }
 
+// The count a page is shown when it comes back is the one the agent last stated, not the one it restored when
+// the process started. A reload does not restart the agent (#100), so the `models` frame a new connection is
+// given is the session's own cached statement — and `SM task` is the only frame that ever restates the count.
+// A summarize is what makes the difference visible: the count drops by most of the conversation, the open page
+// draws the drop, and a page that came back drew the old number until the gateway was restarted.
+func TestSessionKeepsTheCountItRestates(t *testing.T) {
+	fs := openFakeSession(t)
+	if err := fs.session.Send(Request{Prompt: "hi"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	last := fs.watcher.waitFor(t, "the count the turn ended on", func(event Event) bool {
+		return event.Type == "usage" && event.ContextTokens == 9
+	})
+
+	// A page that reconnects asks the same session what it is, and is handed that statement, unchanged: the
+	// three numbers travel together because they were said together.
+	again, err := fs.sessions.Connect(context.Background(), "test", SpawnOptions{})
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	if again.Startup.ContextTokens != last.ContextTokens || again.Startup.StepTps != last.StepTps || again.Startup.TtftMs != last.TtftMs {
+		t.Errorf("a reconnecting page is told %d tokens and %v tok/s, want the last statement %d and %v",
+			again.Startup.ContextTokens, again.Startup.StepTps, last.ContextTokens, last.StepTps)
+	}
+
+	// The same statement rides the list restated to every other session when one of them edits the models —
+	// what `tellModels` does — so a canvas with the count on screen does not lose it to a save in the
+	// settings window, without any reload at all.
+	fs.session.adoptModels(fs.session.snapshot().models)
+	restated := -1
+	events := fs.watcher.all()
+	for index, event := range events {
+		if event.Type == "models" {
+			restated = index
+		}
+	}
+	if restated < 0 {
+		t.Fatalf("no restated list was relayed; events: %+v", events)
+	}
+	if got := events[restated]; got.ContextTokens != last.ContextTokens || got.StepTps != last.StepTps || got.TtftMs != last.TtftMs {
+		t.Errorf("the restated list carries %d tokens and %v tok/s, want %d and %v",
+			got.ContextTokens, got.StepTps, last.ContextTokens, last.StepTps)
+	}
+}
+
 // A setting change is the same stream as a question: one command, no prompt, and the agent's own
 // frames are the whole result.
 func TestSessionRelaysACommandAndTheAgentsStatement(t *testing.T) {

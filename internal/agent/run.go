@@ -155,6 +155,11 @@ func turnStep(state *startup, frame *Frame, emit func(Event)) turnChange {
 			// and whether it is running. The two are one frame, so the numbers are relayed before the end of
 			// the turn is read off them — the frame that ends it carries the final count and nothing is said
 			// afterwards.
+			//
+			// Collected as well as relayed: this is the only frame that restates the count, and a page that
+			// connects is told the session's last statement rather than the one from spawn — a summarize
+			// moves that number by most of a conversation, and it moves it here (#346).
+			state.collect(kind, data)
 			if reported, ok := taskUsage(data); ok {
 				emit(reported.event())
 			}

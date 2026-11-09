@@ -20,14 +20,16 @@ type Event struct {
 	// included. Relayed as the agent restates it, never computed here, because the numbers are a
 	// measurement only the agent can take (`docs/speed-tracking.md` in AlayaCore is where they come from).
 	//
-	// `models` carries the same three when the agent restored a count from a session file at startup, so a
-	// reloaded page knows how full the context is before it asks anything: the frame is the agent's own
-	// startup broadcast, and this is part of what it broadcasts.
+	// `models` carries the same three as the session last heard them — the count restored from a session file
+	// at startup, then every `task` frame since — so a page that connects knows how full the context is before
+	// it asks anything. The session keeps the statement and not the page, because a reload replaces the page
+	// and not the process (#346).
 	ContextTokens int64   `json:"contextTokens,omitempty"`
 	StepTps       float64 `json:"stepTps,omitempty"`
 	TtftMs        int64   `json:"ttftMs,omitempty"`
 
-	// models: the startup broadcast of the spawn that produced this stream
+	// models: the agent's statement about itself — the list, the active model and the level — as it last
+	// restated them. On a connect that is the startup broadcast; a `model_list` mid-conversation restates it.
 	Models         []Model `json:"models,omitempty"`
 	Active         *Model  `json:"active,omitempty"`
 	Level          *int    `json:"level,omitempty"`
@@ -287,18 +289,43 @@ func (s *startup) collect(kind string, data json.RawMessage) {
 	}
 }
 
+// event is this state as a canvas draws it.
+//
+// The active model's limit comes out of the list when the list holds its entry: the limit is the entry's, and the
+// entry is what an editor rewrites — `model_sync` restates the list, while the `model` frame that named the active
+// model is not sent again. A session whose list does not name its model keeps the stated limit, which is the only
+// account of it there is (#347).
 func (s *startup) event() Event {
 	models := make([]Model, 0, len(s.models))
 	for _, object := range s.models {
 		models = append(models, object.info())
 	}
-	event := Event{Type: "models", Models: models, Active: s.active, Level: s.level, CoreVersion: s.coreVersion, MessageVersion: s.messageVersion}
+	event := Event{Type: "models", Models: models, Active: s.activeModel(), Level: s.level, CoreVersion: s.coreVersion, MessageVersion: s.messageVersion}
 	if s.usage != nil {
 		event.ContextTokens = s.usage.contextTokens
 		event.StepTps = s.usage.stepTps
 		event.TtftMs = s.usage.ttftMs
 	}
 	return event
+}
+
+// activeModel is the active model with the limit the list gives it, or the limit the agent stated when the list
+// has no entry for it.
+//
+// A copy, not a write: `active` stays what the agent said about which model this is, so a list that never
+// changes still reads back the same. `SM model_list` always states `context_limit` (it is the field an editor
+// edits), which is why the entry's value is taken as it stands rather than only when it is non-zero.
+func (s *startup) activeModel() *Model {
+	if s.active == nil {
+		return nil
+	}
+	entry := s.modelByID(s.active.ID)
+	if entry == nil {
+		return s.active
+	}
+	active := *s.active
+	active.ContextLimit = entry.number("context_limit")
+	return &active
 }
 
 /**

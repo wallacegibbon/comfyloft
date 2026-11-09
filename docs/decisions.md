@@ -11535,3 +11535,72 @@ own tally could not do.
 the pump's emit), `internal/server/routes_agent.go` (the connect frame), `internal/agent/session_test.go`,
 `internal/server/agent_e2e_test.go`, `frontend/src/services/api/agent.ts`,
 `frontend/src/components/canvas/canvas-agent-panel.tsx` (the `steering` and `turn` branches).
+
+
+## 346. The count the agent restates is the count a page that comes back is shown
+
+**Decision** Every `SM task` frame is written into the session's own `startup` state as well as relayed, so the
+snapshot a new connection is given carries the count the agent last stated — the one it restored from the session
+file at startup and then every restatement since, a summarize included. The `models` frame therefore carries the
+last three numbers (`context_tokens`, `step_tps`, `ttft_ms`), not only the ones from startup.
+
+**Why** A session outlives its socket (#100), so the `models` frame on a reconnect is a cache of what the agent
+said about itself, and #343 says such a cache is written by the pump. It was written only by `waitReady`, at
+spawn. The pump's `task` branch relayed the numbers and dropped them, which is invisible until something moves
+the count down: auto-summarize does exactly that, by most of a conversation. The open page drew the drop
+correctly, and then a reload put the old number back, and a `model_sync` in the settings window put it back on
+every other canvas too — that restatement is published to every other session, so the same stale cache decided
+their denominators. Restarting the server appeared to fix it because a new process reads the summarized file and
+reports the small count in its startup broadcast; no page should have needed a restart to be told the truth.
+`startup.usage` was the only field of the cached state that changed during a conversation and the only one the
+pump did not write — `models`, `active` and `level` were already collected.
+
+**Cost** One `state.collect` on a frame that already arrives a few times a step, under the lock the pump already
+holds; the snapshot now moves mid-turn, which is what it is for. A page that reconnects mid-step is told the
+count from the last step boundary rather than a fresher one — the agent has said nothing newer, and inventing a
+number is what #343 forbids. The sentence in #224 that says `models` carries the count "when the agent restored a
+count from a session file at startup" is superseded: it carries the last one stated.
+
+**Tested** `internal/agent/session_test.go` (`TestSessionKeepsTheCountItRestates`): the fake agent reports 1500 at
+startup and 9 by the end of a turn; a second `Connect` on the live session and a list restated through
+`adoptModels` both carry 9/0/0 — the same three numbers as the `usage` event the page saw last, which is the
+invariant. Before the fix both read 1500 — the reported bug, reproduced at the layer that caused it. Read end to
+end against the real AlayaCore: the summarize path sets the count with `setContextTokensEvent`
+(`session_task.go`), the task's end saves the compacted contents with that count (`session_loop.go`), and a new
+process restores it (`session.go`) — so the restart that hid the bug is the same fact this fix stops depending on.
+
+**Where** `internal/agent/run.go` (`turnStep`, `task`), `internal/agent/sessions.go` (`state`), `internal/agent/events.go`
+(`Event.ContextTokens`), `internal/agent/session_test.go`, `docs/server.md`.
+
+
+## 347. The limit a model holds is the list's, and the frame only says which model
+
+**Decision** `startup.event()` fills the active model's `contextLimit` from the entry with the same id in the model
+list, when the list holds one; `state.active` is left as the agent stated it, and a list that does not name the
+active model leaves the stated limit standing.
+
+**Why** The limit belongs to the entry, and the entry is what an editor rewrites: `model_sync` replaces
+`model.conf`, the agent restates the list to every session, and the `model` frame is sent again only to the session
+that did the sync (`SwitchModel`). Every other open canvas therefore held a copy of the old limit, and the panel
+draws `22K/262144` with it — a denominator that is wrong until that session's own agent happens to restate `SM
+model`, which for a canvas nobody switches a model on is never. Measured on the fake agent before the fix: with id
+1 edited from 1000 to 5000, another session's snapshot still said 1000. It is the same fault as #346 one field
+over — a copy of an agent fact that only one path wrote — and the same answer: derive it from the statement that
+does arrive instead of keeping a second copy.
+
+**Cost** One derived copy per event, and events are built on a connect and on a restated list rather than per
+step. The list always states `context_limit` (`ModelInfo` has no `omitempty` on it, because it is the field an
+editor edits), so the entry's value is taken as it stands rather than only when non-zero — a model edited down to
+"no limit" says so instead of keeping the old number.
+
+**Rejected** Refreshing `state.active` inside `adoptModels`: it fixes the one caller and leaves the copy for the
+next path to remember — which is precisely how #346 happened. Clearing `active` and letting the page find its
+model in the list: the session would lose the one fact only the `model` frame carries, which is *which* model it
+is on.
+
+**Tested** `internal/agent/startup_test.go` (`TestTheActiveModelsLimitIsTheLists`): 1000 from the frame, 5000 after
+the list is restated, `state.active` still 1000 (the derived value is a copy), and a list without the active model
+keeps the stated limit.
+
+**Where** `internal/agent/events.go` (`startup.event`, `startup.activeModel`), `internal/agent/startup_test.go`,
+`docs/server.md`.
