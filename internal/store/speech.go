@@ -23,6 +23,13 @@ import (
  * it would be a credential for every client and a published one for the internet. That is the rule the agent's
  * models already follow: the server holds the list, the page is shown `hasKey` and never the key (#246, #249).
  *
+ * **Why it is not in `data/`.** `data/` is the directory an operator wipes to clear the task index and the locks
+ * — the README calls it runtime state — so a credential typed into the panel must not live there, or a reset
+ * deletes a key nobody meant to delete (#350). It is the operator's file, like the agent's `model.conf`: same
+ * reason (#243, #245), the operator has one set of endpoints and keys. It sits *beside* `alayacore/` and not
+ * inside it, because that directory is AlayaCore's — the server writes only `mcp.conf` there, which is a message
+ * to the agent — and its `AGENT_CONFIG_PATH` moves a namespace this file does not belong to.
+ *
  * **Why a list and not one server.** One address, one model name and one key is a description of one machine
  * (#239, #246) — and a workspace is used from a laptop at a desk with a local gguf on the CPU and from a
  * laptop in a café with a hosted whisper. The list makes both exist at once and one of them active; the
@@ -89,9 +96,10 @@ type SpeechProfileInput struct {
 
 // SpeechProfiles is the list, which entry is active, and the file it lives in.
 type SpeechProfiles struct {
-	file   string
-	logger *logx.Logger
-	mu     sync.RWMutex
+	file       string
+	retiredDir string
+	logger     *logx.Logger
+	mu         sync.RWMutex
 	// profiles is in the user's order, which is the order the page shows and sends back.
 	profiles []SpeechProfile
 	// activeID is the profile dictation uses. It is never 0 while a profile exists: a list with nothing active
@@ -101,9 +109,21 @@ type SpeechProfiles struct {
 	nextID int
 }
 
-// NewSpeechProfiles builds the store for <dataDir>/speech.json.
-func NewSpeechProfiles(dataDir string, logger *logx.Logger) *SpeechProfiles {
-	return &SpeechProfiles{file: filepath.Join(dataDir, "speech.json"), logger: logger, nextID: 1}
+// SpeechProfilesOptions is where the list lives, where the files this build retired live, and the log.
+type SpeechProfilesOptions struct {
+	// File is the list itself, written owner-only (#350).
+	File string
+	// RetiredDir is `<dataDir>`, which held the list until #350 and still holds the single `speech-key.json` of
+	// #246. Neither is read; both are named once in the log and neither is moved or deleted, because a
+	// credential somebody typed is not this process's to delete.
+	RetiredDir string
+	Logger     *logx.Logger
+}
+
+// NewSpeechProfiles builds the store for the file the operator named — `<UserConfigDir>/comfyloft/speech.json`
+// by default.
+func NewSpeechProfiles(opts SpeechProfilesOptions) *SpeechProfiles {
+	return &SpeechProfiles{file: opts.File, retiredDir: opts.RetiredDir, logger: opts.Logger, nextID: 1}
 }
 
 // SpeechProfileUnknownError reports a list that names a profile this store does not have, which is a page and a
@@ -120,7 +140,7 @@ func (e *SpeechProfileUnknownError) Code() string { return "speech_profile_unkno
 
 // Load reads the list. A missing file is the ordinary case — nothing configured — and says nothing.
 func (s *SpeechProfiles) Load() {
-	s.warnAboutTheOldKeyFile()
+	s.warnAboutRetiredFiles()
 	data, err := os.ReadFile(s.file)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -157,15 +177,27 @@ func (s *SpeechProfiles) logActive(prefix string, args ...any) {
 	s.logger.Info("speech: "+prefix+"no profile configured, so dictation will say so", args...)
 }
 
-// warnAboutTheOldKeyFile says so when the single-key file this build used to write is still there.
+// warnAboutRetiredFiles says so when a file this build no longer reads is still there.
 //
-// It is not read and it is not removed: a credential somebody typed is not this process's to delete. But a
-// secret file nothing will ever read again should not sit in the data directory unexplained.
-func (s *SpeechProfiles) warnAboutTheOldKeyFile() {
-	old := filepath.Join(filepath.Dir(s.file), "speech-key.json")
-	if _, err := os.Stat(old); err == nil {
+// Neither is read and neither is removed: a credential somebody typed is not this process's to delete. But a
+// secret file nothing will ever read again should not sit in a directory unexplained — and the one in `data/`
+// is a list the operator would otherwise believe is still dictation's.
+func (s *SpeechProfiles) warnAboutRetiredFiles() {
+	if s.retiredDir == "" {
+		return
+	}
+	if old := filepath.Join(s.retiredDir, "speech-key.json"); fileExists(old) {
 		s.logger.Info("speech: %s is no longer read — a credential now belongs to the profile that uses it", old)
 	}
+	if old := filepath.Join(s.retiredDir, "speech.json"); old != s.file && fileExists(old) {
+		s.logger.Info("speech: %s is no longer read — the list lives in %s (move it there, this build does not)", old, s.file)
+	}
+}
+
+// fileExists reports a file that is there, whatever it holds.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // List is every profile as a page may see it, and the id of the active one (0 when there are none).

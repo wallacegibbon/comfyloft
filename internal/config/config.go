@@ -70,6 +70,10 @@ type Config struct {
 	// AGENT_BIN_DISCOVERY in internal/agent).
 	AgentBin        string
 	AgentConfigPath string
+	// SpeechProfilesPath is the file the speech servers live in: an address, a model name and a credential
+	// each, and which one dictation uses. It is the operator's file, not the workspace's: a key typed into
+	// the panel has to outlive `rm -rf data/`, which is what that directory is for (#350).
+	SpeechProfilesPath string
 	// AgentAutoSummarize is AGENT_AUTO_SUMMARIZE: the share of the model's context, in percent, at which
 	// AlayaCore summarizes the conversation to make room. 0 — the default, and what an unset variable
 	// means — is off, and the flag is then not passed at all.
@@ -102,9 +106,17 @@ func WithWorkflowDir(dir string) Option { return func(c *Config) { c.WorkflowDir
 // WithAgentConfigPath overrides the agent's configuration directory.
 //
 // It exists for tests: without it every test server writes `mcp.conf` into the operator's real
-// `<UserConfigDir>/comfyloft-server/alayacore`, which `make check` was doing to the developer's home directory
+// `<UserConfigDir>/comfyloft/alayacore`, which `make check` was doing to the developer's home directory
 // (#244).
 func WithAgentConfigPath(dir string) Option { return func(c *Config) { c.AgentConfigPath = dir } }
+
+// WithSpeechProfilesPath overrides where the speech profile list lives.
+//
+// It exists for tests, for the same reason as WithAgentConfigPath: without it every test server would write
+// a `speech.json` into the operator's real `<UserConfigDir>/comfyloft` (#244, #350).
+func WithSpeechProfilesPath(path string) Option {
+	return func(c *Config) { c.SpeechProfilesPath = path }
+}
 
 // WithDataDir overrides the data directory.
 func WithDataDir(dir string) Option { return func(c *Config) { c.DataDir = dir } }
@@ -185,6 +197,14 @@ func Load(opts ...Option) (*Config, error) {
 		AgentSkills:         filepath.Join(root, "prompts", "skills"),
 	}
 
+	// The user's config directory is the product's, not the binary's: `comfyloft-server` names one of the two
+	// programs here, and a directory a person opens in a file manager should say which app it belongs to
+	// (#146, #350). Both files below hang off the same one.
+	userConfig := ""
+	if dir, err := os.UserConfigDir(); err == nil {
+		userConfig = filepath.Join(dir, "comfyloft")
+	}
+
 	// The agent keeps its own configuration; the server only says where. A default under the user's
 	// config directory (the platform's, not a hardcoded ~/.config) so a fresh directory is created by
 	// the agent itself on first spawn.
@@ -194,15 +214,26 @@ func Load(opts ...Option) (*Config, error) {
 	// keying it by the hostname only made that rarer. What a segment would protect — two machines sharing one
 	// home directory overwriting each other's `mcp.conf` — is a setup that needs an explicit
 	// `AGENT_CONFIG_PATH` anyway.
-	if cfg.AgentConfigPath == "" {
-		if dir, err := os.UserConfigDir(); err == nil {
-			cfg.AgentConfigPath = filepath.Join(dir, "comfyloft-server", "alayacore")
-		}
+	if cfg.AgentConfigPath == "" && userConfig != "" {
+		cfg.AgentConfigPath = filepath.Join(userConfig, "alayacore")
 	}
 
 	cfg.WorkflowDir = absOrJoin(root, os.Getenv("WORKFLOW_DIR"), "workflows")
 	cfg.DataDir = absOrJoin(root, os.Getenv("DATA_DIR"), "data")
 	cfg.CanvasRoot = absOrJoin(root, os.Getenv("CANVAS_ROOT"), "canvases")
+	// The speech list is the operator's the way the agent's models are, and for the same measured reason: a
+	// credential typed into the panel must not die with `rm -rf data/`, which is what the data directory is
+	// for (#350). It is a file, not a directory, because it is one list — its own variable names it.
+	cfg.SpeechProfilesPath = strings.TrimSpace(os.Getenv("SPEECH_PROFILES_PATH"))
+	if cfg.SpeechProfilesPath == "" {
+		if userConfig != "" {
+			cfg.SpeechProfilesPath = filepath.Join(userConfig, "speech.json")
+		} else {
+			// No home directory to speak of: the list stays with the rest of the state rather than in a path
+			// this process cannot name.
+			cfg.SpeechProfilesPath = filepath.Join(cfg.DataDir, "speech.json")
+		}
+	}
 	// No default: an empty value means "no file to write", and a server run outside a served bundle
 	// should not invent one.
 	cfg.RuntimeConfigPath = strings.TrimSpace(os.Getenv("RUNTIME_CONFIG_PATH"))
@@ -223,6 +254,9 @@ func Load(opts ...Option) (*Config, error) {
 	}
 	if cfg.WebDir != "" {
 		cfg.WebDir = absPath(cfg.WebDir)
+	}
+	if cfg.SpeechProfilesPath != "" {
+		cfg.SpeechProfilesPath = absPath(cfg.SpeechProfilesPath)
 	}
 	cfg.ComfyURL = strings.TrimRight(cfg.ComfyURL, "/")
 

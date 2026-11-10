@@ -822,7 +822,7 @@ export default {
             protocolAnthropic: "Anthropic Messages",
             speech: "Speech",
             speechNote:
-                "The speech servers dictation can be sent to, kept on the server (data/speech.json). The server makes the request, so an address only has to be reachable from the machine it runs on, and a key stays on the server. The selected one is what dictation uses.",
+                "The speech servers dictation can be sent to, kept on the server in its own config file (~/.config/comfyloft/speech.json). The server makes the request, so an address only has to be reachable from the machine it runs on, and a key stays on the server. The selected one is what dictation uses.",
             speechLoading: "Reading the speech servers…",
             speechEmpty: "No speech server configured yet.",
             speechAdd: "Add a speech server",

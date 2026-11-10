@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -499,10 +498,10 @@ func TestSpeechProfilesAreStoredOnDiskAndNeverSentBack(t *testing.T) {
 		t.Errorf("hasKey = %v, want true", first["hasKey"])
 	}
 
-	file := filepath.Join(server.cfg.DataDir, "speech.json")
+	file := server.cfg.SpeechProfilesPath
 	info, err := os.Stat(file)
 	if err != nil {
-		t.Fatalf("the list was not written: %v", err)
+		t.Fatalf("the list was not written to %s: %v", file, err)
 	}
 	// Owner-only: a task index that only its owner can read is a workspace somebody cannot copy; a credential
 	// that a second account can read is a credential that has leaked.

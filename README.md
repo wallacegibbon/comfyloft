@@ -72,7 +72,7 @@ the canvas frontend is a self-contained subtree beside it (see Credits):
 ├── workflows/         # what the product exposes: graphs + registry.json
 ├── resources.json     # what has to be installed: models, node packs, runtime deps
 ├── prompts/           # prompt skill files
-├── data/              # runtime state: tasks.json, settings.json, speech.json, resource-lock.json (not tracked)
+├── data/              # runtime state: tasks.json, settings.json, resource-lock.json (not tracked)
 ├── canvases/          # the workspace: one directory per canvas (not tracked)
 ├── bin/               # build output (not tracked)
 ├── frontend/          # the canvas frontend (from the upstream project, since reworked)

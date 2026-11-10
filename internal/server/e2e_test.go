@@ -217,6 +217,8 @@ func newTestServerWith(t *testing.T, fake *fakeComfy, graphFile string, graph, e
 		config.WithCanvasRoot(filepath.Join(root, "canvases")),
 		// The agent's directory is the operator's — models and keys — so a test server keeps its own (#244).
 		config.WithAgentConfigPath(filepath.Join(root, "agent")),
+		// And so does the speech list, for the same reason (#350).
+		config.WithSpeechProfilesPath(filepath.Join(root, "speech.json")),
 		config.WithRuntimeConfigPath(filepath.Join(root, "config.js")),
 		config.WithServerHost("127.0.0.1"),
 		config.WithoutScanOnStart(),

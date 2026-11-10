@@ -12,7 +12,7 @@ import { useConfigStore } from "@/stores/use-config-store";
 /**
  * The speech servers dictation can be sent to, and the four things a page may do to that list.
  *
- * The list is the server's (`data/speech.json`): it holds each profile's key, which a page must never see, so
+ * The list is the server's (`~/.config/comfyloft/speech.json`): it holds each profile's key, which a page must never see, so
  * nothing about it is a preference of this window. What the page has is what `GET /api/speech/profiles`
  * answered — a name, an address, a model name and whether a key is stored — and every change is the whole list
  * sent back with one entry added, changed, removed or made active.

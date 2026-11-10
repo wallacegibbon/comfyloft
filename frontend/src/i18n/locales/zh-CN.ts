@@ -854,7 +854,7 @@ export default {
             protocolOpenAI: "OpenAI Chat Completion",
             protocolAnthropic: "Anthropic Messages",
             speech: "语音输入",
-            speechNote: "听写可以发给的语音服务，保存在服务端的 data/speech.json 里。录音由服务端转发，所以地址只要服务端能访问即可；密钥只留在服务端。选中的那一项就是听写使用的。",
+            speechNote: "听写可以发给的语音服务，保存在服务端自己的配置文件里（~/.config/comfyloft/speech.json）。录音由服务端转发，所以地址只要服务端能访问即可；密钥只留在服务端。选中的那一项就是听写使用的。",
             speechLoading: "正在读取语音服务…",
             speechEmpty: "还没有配置语音服务。",
             speechAdd: "添加语音服务",

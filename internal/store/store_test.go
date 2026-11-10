@@ -90,7 +90,7 @@ func TestSpeechProfilesLoadRepairsWhatTheFileSays(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	profiles := NewSpeechProfiles(dir, quietLogger())
+	profiles := speechStore(dir, quietLogger())
 	profiles.Load()
 	views, active := profiles.List()
 	if len(views) != 3 {
@@ -120,7 +120,7 @@ func TestSpeechProfilesLoadRepairsWhatTheFileSays(t *testing.T) {
 // different one — even when the page sends the list back unchanged in between.
 func TestSpeechProfilesNumberNewEntriesAfterTheHighestID(t *testing.T) {
 	dir := t.TempDir()
-	profiles := NewSpeechProfiles(dir, quietLogger())
+	profiles := speechStore(dir, quietLogger())
 	profiles.Load()
 
 	first := SpeechProfileInput{URL: "http://127.0.0.1:1/v1/audio/transcriptions"}
@@ -139,7 +139,7 @@ func TestSpeechProfilesNumberNewEntriesAfterTheHighestID(t *testing.T) {
 	}
 
 	// A restart reads the ids back, and the next addition still does not reuse one.
-	reloaded := NewSpeechProfiles(dir, quietLogger())
+	reloaded := speechStore(dir, quietLogger())
 	reloaded.Load()
 	views, _ = reloaded.List()
 	third := SpeechProfileInput{URL: "http://127.0.0.1:3/v1/audio/transcriptions"}
@@ -156,12 +156,60 @@ func TestSpeechProfilesNumberNewEntriesAfterTheHighestID(t *testing.T) {
 	}
 }
 
+// speechStore is the store a test reads and writes: the list is a file of its own (#350), and the directory the
+// retired files live in is left as whatever the caller made it, so one test's leftovers are another's subject.
+func speechStore(dir string, logger *logx.Logger) *SpeechProfiles {
+	return NewSpeechProfiles(SpeechProfilesOptions{File: filepath.Join(dir, "speech.json"), Logger: logger})
+}
+
+// The list moved out of `data/` (#350), so the file that is still there is not read — and a reader who finds a
+// profile list in the directory they thought dictation used has to be told, once, where the real one is.
+func TestSpeechProfilesDoNotReadTheRetiredDataFile(t *testing.T) {
+	root := t.TempDir()
+	dataDir, configDir := filepath.Join(root, "data"), filepath.Join(root, "config")
+	for _, dir := range []string{dataDir, configDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	retired := filepath.Join(dataDir, "speech.json")
+	if err := os.WriteFile(retired, []byte(`{"version":1,"active":1,"profiles":[
+	  {"id":1,"name":"old","url":"http://127.0.0.1:1/v1/audio/transcriptions","key":"sk-old"}
+	]}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	buffer := &bytes.Buffer{}
+	profiles := NewSpeechProfiles(SpeechProfilesOptions{
+		File:       filepath.Join(configDir, "speech.json"),
+		RetiredDir: dataDir,
+		Logger:     logx.NewWithWriter("test", buffer),
+	})
+	profiles.Load()
+
+	if views, active := profiles.List(); len(views) != 0 || active != 0 {
+		t.Errorf("List = %+v/%d, want the retired file left alone", views, active)
+	}
+	line := buffer.String()
+	if !strings.Contains(line, retired) || !strings.Contains(line, filepath.Join(configDir, "speech.json")) {
+		t.Errorf("log = %q, want the retired file and where the list lives now", line)
+	}
+	// The retired key is on disk and never in the log — the same rule the live file follows (#255).
+	if strings.Contains(line, "sk-old") {
+		t.Errorf("log = %q, carries the retired key", line)
+	}
+	// Nothing was written to the new path either: the operator moves the file, this build does not.
+	if _, err := os.Stat(filepath.Join(configDir, "speech.json")); !os.IsNotExist(err) {
+		t.Errorf("the list was created at %s, want only a line about the file to move", filepath.Join(configDir, "speech.json"))
+	}
+}
+
 // Which server the audio goes to is the one fact about this file worth a line, and the credential must not be in
 // it: the log is a file somebody pastes into an issue (#255).
 func TestSpeechProfilesSayWhereDictationGoes(t *testing.T) {
 	buffer := &bytes.Buffer{}
 	key := "sk-test"
-	profiles := NewSpeechProfiles(t.TempDir(), logx.NewWithWriter("test", buffer))
+	profiles := speechStore(t.TempDir(), logx.NewWithWriter("test", buffer))
 
 	// Nothing configured yet: the line says so rather than saying nothing, because the panel's refusal ("no speech
 	// server is configured") is what a reader will be looking at.

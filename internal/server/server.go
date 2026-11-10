@@ -117,7 +117,11 @@ func New(cfg *config.Config, logger *logx.Logger) (*Server, error) {
 		return nil, err
 	}
 
-	speechProfiles := store.NewSpeechProfiles(cfg.DataDir, logger)
+	speechProfiles := store.NewSpeechProfiles(store.SpeechProfilesOptions{
+		File:       cfg.SpeechProfilesPath,
+		RetiredDir: cfg.DataDir,
+		Logger:     logger,
+	})
 	speechProfiles.Load()
 
 	setupManager := setup.New(setup.Options{

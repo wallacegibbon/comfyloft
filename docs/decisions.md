@@ -11756,3 +11756,54 @@ the error branch and the command-output branch), `internal/agent/session_test.go
 `internal/server/agent_e2e_test.go`, `docs/server.md`, `frontend/src/lib/canvas/agent-transcript.ts` (`TurnInstant`,
 `turnFromFrame`), `frontend/src/components/canvas/canvas-agent-panel.tsx` (the `turn` branch, the `turn` state's
 type, the comments above `beginTurn`, the tick and the error branch), `frontend/tests/agent-transcript.test.ts`.
+
+## 350. The user config directory is the product's, and the speech list lives in it
+
+**Decision** The user's config directory is `<UserConfigDir>/comfyloft/`, not `<UserConfigDir>/comfyloft-server/`:
+the agent's own files move to `comfyloft/alayacore/`. And the speech servers — a name, an address, a model and a
+key each, plus which one dictation uses — move out of `data/speech.json` into `comfyloft/speech.json`
+(`SPEECH_PROFILES_PATH`, `0600`): the same directory as the agent's, beside it and not inside it. There is no
+fallback and no migration code: the defaults change, and the two files this build retired — `data/speech.json` and
+`data/speech-key.json` from #246 — are named once each in the log and left where they are. **Amends #240**, which
+spelled the config directory after the binary.
+
+**Why the parent is `comfyloft`** #146 already drew the line: `comfyloft-server` is one of two binaries and
+`comfyloft` is the product. A directory a person opens in a file manager names the app, not a process inside it —
+and there are two programs here, so a parent named after one of them is wrong the day the other needs a file.
+Nothing about it is released, so the rename is free; the cost only grows.
+
+**Why the speech list is not in `data/`** It is the operator's the way the agent's models are — #245's own words,
+"the models are the operator's, and one operator has one set of keys", and a speech profile is the same shape: an
+endpoint, a model name, a credential. `data/` is the other half: the README calls it runtime state, it holds the
+task index, the locks and the preferences, and it is what an operator wipes when they want a clean slate. Every
+other file there is regenerable from work that is somewhere else; the speech list is a secret somebody typed, and
+`rm -rf data/` would take it without a word. It also dies with an install moved to another directory, which is the
+one thing #243 and #245 were both about.
+
+**Why not `alayacore/speech.json`** That directory is AlayaCore's namespace: `model.conf` is its file with its
+twelve fields, the server writes exactly one `mcp.conf` into it (a message to the agent, rewritten every start),
+and `AGENT_CONFIG_PATH` moves it. A server-owned list in there would be two owners and two formats in one
+directory, and two servers on a host would share one list and one active id — the collision #245 answered with an
+explicit variable, inherited for a file that is not the agent's.
+
+**Costs** One more tree to back up and one more variable: two servers on one home directory share a speech list
+the same way they share the agent's models, and are told apart with `SPEECH_PROFILES_PATH`, in the unit file.
+Moving an existing install is two commands — `mv ~/.config/comfyloft-server ~/.config/comfyloft` and
+`mv data/speech.json ~/.config/comfyloft/speech.json` — and the log says so once for each file it finds, rather
+than reading it: a fallback read is a second source of truth kept alive for a build nobody has installed (#240).
+
+**Tested** `internal/config`: `TestAgentDirectoryHasNoSegmentOfItsOwn` (now ending in `/comfyloft/alayacore`) and
+`TestSpeechProfilesSitInTheConfigDirectory` (the list ends in `/comfyloft/speech.json`, its directory is the
+agent's directory, and it is not under `DataDir`). `internal/store`: `TestSpeechProfilesDoNotReadTheRetiredDataFile`
+— a list in `data/` with a key in it loads as nothing, the log names both the retired file and the real one and
+carries neither key, and no file is created at the new path. `internal/server`: the existing profiles test now
+stats `cfg.SpeechProfilesPath` and still sees `0600` with the key on disk and nothing in an answer; every test
+server keeps its own file, so `make check` writes nothing into the operator's home (#244). `go test ./internal/...`
+in full, `gofmt -l`, `make check`.
+
+**Where** `internal/config/config.go` (`SpeechProfilesPath`, `SPEECH_PROFILES_PATH`, `WithSpeechProfilesPath`, the
+one `userConfig` both defaults hang off), `internal/store/speech.go` (`SpeechProfilesOptions`, `retiredDir`,
+`warnAboutRetiredFiles`), `internal/server/server.go`, `internal/server/agent_config.go`, `internal/config/config_test.go`,
+`internal/store/store_test.go`, `internal/server/{e2e_test.go,routes_speech_test.go}`, `docs/server.md`,
+`README.md`, `frontend/src/{lib/speech-profiles.ts,components/settings/speech-profiles-section.tsx}`,
+`frontend/src/i18n/locales/{en-US,zh-CN}.ts`.

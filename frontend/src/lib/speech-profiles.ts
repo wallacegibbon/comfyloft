@@ -3,7 +3,7 @@ import type { SpeechProfile, SpeechProfileInput } from "@/services/api/speech";
 /**
  * The editor's side of the speech server list.
  *
- * The list is the server's (`data/speech.json`, `internal/store/speech.go`): the page shows what `GET
+ * The list is the server's (`~/.config/comfyloft/speech.json`, `internal/store/speech.go`): the page shows what `GET
  * /api/speech/profiles` answered and sends the whole list back with one entry added, changed, removed or made
  * active. What a page cannot send is the part it has never been shown — a profile's key — so an existing entry
  * travels by id and the fields on this form, and a key travels only when this page has one to give: a profile

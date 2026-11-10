@@ -12,7 +12,8 @@ export marker. Display text says `Comfy Loft`.
 It is **two statically linked binaries** — `bin/comfyloft-server` (this service) and `bin/comfyloft-mcp`
 (the stdio bridge AlayaCore spawns to reach the canvas tools) — and no Node runtime, no `node_modules`,
 no Python virtualenv. Configuration comes from the environment; all mutable state lives in `data/`, and
-the agent's own configuration lives under the user's config directory (#147).
+what belongs to the operator rather than to the workspace — the agent's models and the speech servers — lives
+under the user's config directory, `~/.config/comfyloft/` (#147, #350).
 
 ## Why Go
 
@@ -125,7 +126,8 @@ authentication; there is no configuration in this server that makes an untrusted
 | `MAX_IMPORT_BYTES` | `8589934592` | Ceiling for one imported canvas archive: the body and the bytes it unpacks to. Its own number because a canvas archive carries every clip that canvas shows. |
 | `RESOURCE_CONCURRENCY` | `2` | Parallel downloads during a resource install. |
 | `ALAYACORE_BIN` | _(found)_ | The agent binary. Empty looks on `PATH`, then beside the server. |
-| `AGENT_CONFIG_PATH` | `UserConfigDir()/comfyloft-server/alayacore` | The agent's own config directory: `model.conf`, `runtime.conf`, and the `mcp.conf` the server writes. No address or machine name in the path — both used to be there and both lost the operator's models when that one string changed (#245). Two servers sharing one home directory need this set per unit. |
+| `AGENT_CONFIG_PATH` | `UserConfigDir()/comfyloft/alayacore` | The agent's own config directory: `model.conf`, `runtime.conf`, and the `mcp.conf` the server writes. No address or machine name in the path — both used to be there and both lost the operator's models when that one string changed (#245). Two servers sharing one home directory need this set per unit. |
+| `SPEECH_PROFILES_PATH` | `UserConfigDir()/comfyloft/speech.json` | The speech servers dictation can be sent to: a name, an address, a model and a key each, plus which one is active. Owner-only (`0600`) and never in an answer. It is a file of the operator's, not of the workspace, so it is not in `data/` — that directory is what an operator wipes to clear the task index (#350). It sits beside `alayacore/`, not inside it: that namespace is the agent's. Two servers on one home directory share this list the way they share the agent's models, so a second one sets this per unit. |
 | `AGENT_AUTO_SUMMARIZE` | `0` | Passed to the agent as `--auto-summarize`: at this percentage of the model's context, AlayaCore summarizes the conversation to make room. `0` — and unset — is off, and passes no flag at all. A value outside `0`–`100` stops the server at startup instead of quietly meaning "off", because off is what a mistyped threshold looks like. |
 | `MCP_BIN` | beside the server binary (`comfyloft-mcp`) | Overrides where the bridge is expected. The path goes into the static `mcp.conf` on every start, so a moved release directory does not leave a stale one behind. |
 
@@ -438,9 +440,12 @@ write also bumps `rev`, and a save whose `If-Match` names an older one is refuse
 current summary in `details.current` — the browser is a cache now, and a cache that races must lose.
 
 **One thing is deliberately not in that document.** The speech servers — where each one listens, the model it
-calls its own, and the credential it wants — live in `data/speech.json`, mode `0600`: `/config.js` is the
-document whole, so a credential in the preferences would be handed to every client that can load the canvas,
-and `RUNTIME_CONFIG_PATH` publishes that script as a file for a static host. `GET /api/speech/profiles` answers
+calls its own, and the credential it wants — live in `speech.json` under the user's config directory
+(`SPEECH_PROFILES_PATH`), mode `0600`: `/config.js` is the document whole, so a credential in the preferences
+would be handed to every client that can load the canvas, and `RUNTIME_CONFIG_PATH` publishes that script as a
+file for a static host. Nor is it in `data/`: that directory is the throwaway half of the install — the task
+index, the locks — and a key somebody typed must outlive `rm -rf data/` (#350). The two directories this build
+retired are named once in the log and left alone, never read and never deleted. `GET /api/speech/profiles` answers
 the list and which entry is active, with `hasKey` and never a key; `PUT /api/speech/profiles` takes the whole
 list back with `{"profiles":[…],"active":<id>}`, where an entry without a key field keeps the stored one and
 `""` removes it. Dictation is sent to the active profile with the key as `Authorization: Bearer`, and no key is

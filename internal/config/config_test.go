@@ -21,7 +21,7 @@ func isolateEnv(t *testing.T) {
 		"MAX_STORED_TASKS", "CLEANUP_INTERVAL_MS",
 		"MAX_UPLOAD_BYTES", "MAX_WORKFLOW_BYTES",
 		"RESOURCE_CONCURRENCY", "COMFYLOFT_SERVER_ROOT",
-		"ALAYACORE_BIN", "AGENT_CONFIG_PATH", "AGENT_AUTO_SUMMARIZE",
+		"ALAYACORE_BIN", "AGENT_CONFIG_PATH", "AGENT_AUTO_SUMMARIZE", "SPEECH_PROFILES_PATH",
 	} {
 		t.Setenv(name, "")
 	}
@@ -285,15 +285,37 @@ func TestAgentDirectoryDoesNotDependOnWhereTheServerListens(t *testing.T) {
 	}
 }
 
-// `.../comfyloft-server/alayacore`, and nothing between them: no machine name, no address, no port.
+// `.../comfyloft/alayacore`, and nothing between them: no machine name, no address, no port.
 func TestAgentDirectoryHasNoSegmentOfItsOwn(t *testing.T) {
 	isolateEnv(t)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if want := "/comfyloft-server/alayacore"; !strings.HasSuffix(filepath.ToSlash(cfg.AgentConfigPath), want) {
+	if want := "/comfyloft/alayacore"; !strings.HasSuffix(filepath.ToSlash(cfg.AgentConfigPath), want) {
 		t.Fatalf("AgentConfigPath = %q, want it to end in %q", cfg.AgentConfigPath, want)
+	}
+}
+
+// The directory is the product's, not the binary's (#146, #350), and the speech list is a file in it beside the
+// agent's: one user config directory, two things that belong to the operator.
+func TestSpeechProfilesSitInTheConfigDirectory(t *testing.T) {
+	isolateEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := "/comfyloft/speech.json"; !strings.HasSuffix(filepath.ToSlash(cfg.SpeechProfilesPath), want) {
+		t.Fatalf("SpeechProfilesPath = %q, want it to end in %q", cfg.SpeechProfilesPath, want)
+	}
+	if filepath.Dir(cfg.SpeechProfilesPath) != filepath.Dir(cfg.AgentConfigPath) {
+		t.Fatalf("the speech list is in %q and the agent's configuration in %q, want one directory",
+			filepath.Dir(cfg.SpeechProfilesPath), filepath.Dir(cfg.AgentConfigPath))
+	}
+	// Not in `data/`: that directory is what an operator wipes to clear the task index, and a key typed into
+	// the panel must outlive it.
+	if strings.HasPrefix(filepath.ToSlash(cfg.SpeechProfilesPath), filepath.ToSlash(cfg.DataDir)+"/") {
+		t.Fatalf("SpeechProfilesPath = %q, want a credential out of the data directory", cfg.SpeechProfilesPath)
 	}
 }
 
