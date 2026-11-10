@@ -69,6 +69,16 @@ while IFS= read -r line; do
       sleep 2
       printf 'Ax{"id":"2","type":"text","text":"slow answer"}\n'
       printf 'SM{"type":"task","data":{"in_progress":false}}\n' ;;
+    UX*"wait for the task"*)
+      # A provider that takes its time: the message is in and the agent says nothing — not even that the task
+      # started — for a second. That silence is the wait a page that reloads is asking about (#349).
+      printf '%s\n' "$line"
+      if [ -n "$SESSION" ]; then printf '%s\n' "$line" >> "$SESSION"; fi
+      WAITING=1
+      sleep 1
+      printf 'SM{"type":"task","data":{"in_progress":true}}\n'
+      printf 'Ax{"id":"2","type":"text","text":"waited"}\n'
+      printf 'SM{"type":"task","data":{"in_progress":false}}\n' ;;
     UX*'[comfyloft]'*)
       printf '%s\n' "$line"
       NOTICE=1
@@ -84,8 +94,8 @@ while IFS= read -r line; do
       # the scripted one — which is how a delete issued on the end of a turn could find the agent busy again
       # (the flaky half of TestDeletingABusySessionIsRefused). SUMMARIZE answers at flush time, so it is not
       # one of them.
-      if [ -n "$SLOW" ] || [ -n "$NOTICE" ]; then
-        SLOW=""; NOTICE=""
+      if [ -n "$SLOW" ] || [ -n "$NOTICE" ] || [ -n "$WAITING" ]; then
+        SLOW=""; NOTICE=""; WAITING=""
         continue
       fi
       if [ -n "$SUMMARIZE" ]; then
@@ -811,6 +821,35 @@ func TestAReloadInTheMiddleOfATurnKeepsIt(t *testing.T) {
 	if got := spawns(t, spawnLog); got != 1 {
 		t.Fatalf("spawned %d agents, want the one that was already running", got)
 	}
+}
+
+// TestAMessageIsATurnBeforeTheAgentSaysSo: the message has gone into the agent and nothing has come back — not a
+// word, not even the task announcement. That silence is the turn, and a page that connects in it is told somebody
+// is working and how long it has been going, which is the question a reload is asking (#349). The age is the
+// send's: a session that waited for the task frame to say so would answer idle here, which is what it did.
+func TestAMessageIsATurnBeforeTheAgentSaysSo(t *testing.T) {
+	server, _ := startAgentServer(t)
+	session := canvasSession(t, server)
+	conn := openSocket(t, server, session)
+
+	// The fake agent announces nothing for a second, which is the window this opens in.
+	send(t, conn, map[string]any{"prompt": "wait for the task"})
+	time.Sleep(200 * time.Millisecond)
+	_ = conn.Close()
+
+	next, _, turn := connect(t, server, session)
+	defer next.Close()
+	t.Cleanup(func() { _ = next.Close() })
+	if !turnRunning(turn) {
+		t.Fatal("a message that had gone in was reported as no turn, and the agent had not said anything yet")
+	}
+	// And the age is the message's, not the agent's announcement's — that frame has not arrived.
+	if got := turnElapsed(turn); got < 100 {
+		t.Fatalf("the turn was reported %dms old, want it counted from the send", got)
+	}
+
+	// It is the same turn the agent then announces: the answer lands and the turn ends once.
+	until(t, next, "done")
 }
 
 // TestDeletingASessionForgetsTheConversation: the canvas can also end its conversation without ending

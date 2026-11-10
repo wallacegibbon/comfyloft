@@ -253,6 +253,12 @@ first one, so the transcript alone cannot tell a page which of the two it is loo
 (with optional `images` as data URLs), `{"command":…,"args":…}` for one of AlayaCore's own settings,
 `{"cancel":true}`, `{"toolResult":…}` for a tool the agent asked for, and `{"close":true}`.
 
+`running` on that `turn` frame is the session's answer, and a turn begins where the prompt is written: a
+page that connects while the provider has not said anything yet is told somebody is working, and how long it
+has been. The agent's task frames are then what confirm that turn and what end it, and a turn with no task
+behind it — a message refused, or a prompt the agent held and dropped when a cancel was answered — comes back
+as `running` false with a `done` to go with it (#349).
+
 `notice` is AlayaCore's `SM notify` — the agent saying what it is doing to itself ("Summarizing
 conversation…", "retrying in 5s (retry 1/3)"). It is not conversation, so it is not in the session file, and
 it is not a failure, so it is not an `error`; `tool_result` carries `isError` from the UF frame's `is_error`,

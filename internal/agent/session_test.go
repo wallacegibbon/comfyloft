@@ -38,18 +38,62 @@ while IFS= read -r line; do
     CI*'"name":"reasoning_level_set"'*)
       printf 'SM{"type":"reasoning_level","data":{"level":2}}\n'
       printf 'CO{"command_id":"1","result":{"level":2}}\n' ;;
+    CI*'"name":"cancel"'*)
+      # The agent's answer to a cancel. A prompt it accepted and never started is dropped here, with a notify
+      # and nothing else — no task frame, so this answer is the only news of it (#349).
+      if [ -n "$HOLD" ]; then
+        HOLD=""
+        printf 'SM{"type":"notify","data":{"text":"prompt dropped — it was canceled before it could start"}}\n'
+      fi
+      printf 'CO{"command_id":"cancel","result":null}\n' ;;
     UX*'"type":"image"'*)
       # A picture with no words is still a user message: the items are staged, and UE sends them.
       PICTURE=1 ;;
     UX*refuse*)
       REFUSE=1 ;;
+    UX*"wait first"*)
+      WAIT_FIRST=1 ;;
+    UX*"fail inside"*)
+      FAIL_INSIDE=1 ;;
+    UX*"hold this"*)
+      HOLD=1 ;;
     UX*'queue'*)
       QUEUE=1 ;;
     UE)
+      if [ -n "$HOLD" ]; then
+        # Accepted, not started: the agent is not ready for a task yet, so it holds the prompt and says so in a
+        # notify. No task frame is coming until it starts one (#349).
+        printf 'SM{"type":"notify","data":{"text":"prompt deferred until MCP initialization completes"}}\n'
+        continue
+      fi
+      if [ -n "$WAIT_FIRST" ]; then
+        # A provider that takes its time: the agent says nothing at all for a second after the message went in,
+        # which is the window a page that reloads is asking about (#349). The second pause is the turn still
+        # running after the task was announced, so a test can read the age there.
+        WAIT_FIRST=""
+        sleep 1
+        printf 'SM{"type":"task","data":{"in_progress":true,"current_step":1}}\n'
+        printf 'Ax{"id":"2","type":"text","text":"waited"}\n'
+        sleep 1
+        printf 'SM{"type":"task","data":{"in_progress":false,"context_tokens":3}}\n'
+        continue
+      fi
+      if [ -n "$FAIL_INSIDE" ]; then
+        # The task was taken and its work failed: an error *inside* a turn, and the task-end frame comes after
+        # it — which is what tells this apart from a refused message.
+        FAIL_INSIDE=""
+        printf 'SM{"type":"task","data":{"in_progress":true,"current_step":1}}\n'
+        printf 'SM{"type":"error","data":{"text":"the provider refused the request"}}\n'
+        sleep 1
+        printf 'SM{"type":"task","data":{"in_progress":false,"context_tokens":3}}\n'
+        continue
+      fi
       if [ -n "$REFUSE" ]; then
         # A message the agent will not take: an error and no task at all — not even the task-start frame, so
-        # nothing about this message is ever a turn.
+        # nothing about this message is ever a task. The pause is the moment the message was out and the agent
+        # had not yet said no (#349).
         REFUSE=""
+        sleep 1
         printf 'SM{"type":"error","data":{"text":"the task could not start"}}\n'
         continue
       fi
@@ -202,9 +246,9 @@ func TestSessionStreamsTheAnswerAndKeepsKeysHome(t *testing.T) {
 
 // TestAnImageOnlyMessageIsATurn: a message is content items and a flush, whatever the items are — `UX` carries
 // text or a picture, `UE` sends the message (`wire.go`) — and a picture with no words is a message the agent
-// takes like any other: it announces the task, works, and announces the end. The session reads those two frames
-// (#342), which is why a page that connects while the model is looking at the picture is told the agent is
-// running instead of idle — and why the delete route refuses to cancel it.
+// takes like any other: a turn from the send, announced as a task and ended by one. That is why a page that
+// connects while the model is looking at the picture is told the agent is running instead of idle — and why the
+// delete route refuses to cancel it (#342, #349).
 func TestAnImageOnlyMessageIsATurn(t *testing.T) {
 	fs := openFakeSession(t)
 	if err := fs.session.Send(Request{Images: []string{"data:image/png;base64,cGljdHVyZQ=="}}); err != nil {
@@ -235,19 +279,95 @@ func TestAnImageOnlyMessageIsATurn(t *testing.T) {
 	}
 }
 
-// TestAMessageTheAgentRefusesIsNoTurn: the agent answers a message it will not take with an error and no task
-// at all — no task-start frame, so nothing running and nothing to end (#342). Reading the turn off the frames
-// is what makes this true; a session that recorded a turn because it had written a prompt would answer "busy"
-// for the life of the process, showing a working panel over a conversation nobody is working on and refusing
-// to clear it (#187).
-func TestAMessageTheAgentRefusesIsNoTurn(t *testing.T) {
+// TestAMessageIsATurnFromTheSend: the message is out and the provider has not said anything — that wait is the
+// turn, and it is counted from the write. The agent's task frame arrives a second later here, and it confirms
+// the same turn instead of starting a new one: the age is still the message's, which is what lets a page that
+// reloads in the gap between the two be told somebody is working, and for how long (#349).
+func TestAMessageIsATurnFromTheSend(t *testing.T) {
+	fs := openFakeSession(t)
+	if err := fs.session.Send(Request{Prompt: "wait first"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	// Nothing has come back: the fake agent is asleep before it announces anything at all.
+	if running, _ := fs.session.Turn(); !running {
+		t.Fatal("a message that had just gone out left the session idle")
+	}
+	// And the clock is the send's: it runs while the agent says nothing, which is the whole point of it.
+	time.Sleep(400 * time.Millisecond)
+	if running, elapsed := fs.session.Turn(); !running || elapsed < 300*time.Millisecond {
+		t.Fatalf("the turn was running %t for %s, want a count that began at the send", running, elapsed)
+	}
+
+	// The task frame a second in is the same turn confirmed, not a new one.
+	fs.watcher.waitFor(t, "the first word of the answer", func(event Event) bool { return event.Type == "delta" })
+	if running, elapsed := fs.session.Turn(); !running || elapsed < 300*time.Millisecond {
+		t.Fatalf("the agent's task announcement restarted the turn at %s", elapsed)
+	}
+	fs.watcher.waitFor(t, "the end of the turn", func(event Event) bool { return event.Type == "done" })
+	if running, _ := fs.session.Turn(); running {
+		t.Fatal("the turn never ended")
+	}
+}
+
+// TestAMessageTheAgentRefusesEndsTheTurnItOpened: the agent answers a message it will not take with an error and
+// no task at all. The message is a turn from the send — it is out, and the wait is real — and that error is what
+// ends it: a refused message gets no `done` from the agent, and a session left running for the life of the
+// process would show a working panel over a conversation nobody is working on and refuse to clear it (#187,
+// #349).
+func TestAMessageTheAgentRefusesEndsTheTurnItOpened(t *testing.T) {
 	fs := openFakeSession(t)
 	if err := fs.session.Send(Request{Prompt: "refuse this one"}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
+	if running, _ := fs.session.Turn(); !running {
+		t.Fatal("a message that had just gone out left the session idle")
+	}
 	fs.watcher.waitFor(t, "the agent's refusal", func(event Event) bool { return event.Type == "error" })
+	fs.watcher.waitFor(t, "the end of the turn", func(event Event) bool { return event.Type == "done" })
 	if running, _ := fs.session.Turn(); running {
-		t.Fatal("a message the agent refused was recorded as a turn, and no frame will ever end it")
+		t.Fatal("a message the agent refused was left running, and no frame will ever end it")
+	}
+}
+
+// TestAnAcceptedPromptThatIsCanceledEndsTheTurn: the agent took the message and has not started it — the case a
+// session that is not ready for a task holds it in — so stopping it drops it, and the only frames are a `notify`
+// and the answer to the cancel. No task was ever announced, so no task-end is coming: without reading that answer
+// the turn would run for the life of the process, with a row counting a message that no longer exists and a delete
+// route refusing to touch the conversation (#349).
+func TestAnAcceptedPromptThatIsCanceledEndsTheTurn(t *testing.T) {
+	fs := openFakeSession(t)
+	if err := fs.session.Send(Request{Prompt: "hold this"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	fs.watcher.waitFor(t, "the agent holding the prompt", func(event Event) bool { return event.Type == "notice" })
+	if running, _ := fs.session.Turn(); !running {
+		t.Fatal("a prompt the agent is holding was reported as no turn")
+	}
+
+	if err := fs.session.Cancel(""); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	fs.watcher.waitFor(t, "the end of the turn", func(event Event) bool { return event.Type == "done" })
+	if running, _ := fs.session.Turn(); running {
+		t.Fatal("the dropped prompt left the session running, and no frame will ever end it")
+	}
+}
+
+// TestAFailureInsideAnAcceptedTurnDoesNotEndIt: an error the agent says after it announced the task is the work
+// failing, not the message coming back. Its own task-end frame is what ends the turn, a frame later — ending it
+// at the error would take the row off the panel while the agent is still winding down.
+func TestAFailureInsideAnAcceptedTurnDoesNotEndIt(t *testing.T) {
+	fs := openFakeSession(t)
+	if err := fs.session.Send(Request{Prompt: "fail inside"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	fs.watcher.waitFor(t, "the agent's error", func(event Event) bool { return event.Type == "error" })
+	if running, _ := fs.session.Turn(); !running {
+		t.Fatal("an error inside a turn the agent had taken ended it before the task did")
+	}
+	fs.watcher.waitFor(t, "the end of the turn", func(event Event) bool { return event.Type == "done" })
+	if running, _ := fs.session.Turn(); running {
+		t.Fatal("the turn's own end did not end it")
 	}
 }
 
@@ -286,9 +406,26 @@ func TestTheQueueIsCountedOnceAndStated(t *testing.T) {
 	fs.watcher.waitFor(t, "the end of the turn", func(event Event) bool { return event.Type == "done" })
 }
 
-// TestAWhitespaceOnlyMessageIsNoTurn: a message of spaces is no content item, so nothing is written and no task
-// is announced — and the session says idle, which is the truth. It is the same fact as the two tests above seen
-// from the other side: the turn is what the agent announces, not what a caller meant to send.
+// TestAMessageThatCannotBeWrittenIsNoTurn: the write is what puts a message in the agent's hands, and a write
+// that fails — the process died under the session — put nothing there. The turn recorded for it is given back,
+// because no frame will ever arrive to end it (#349).
+func TestAMessageThatCannotBeWrittenIsNoTurn(t *testing.T) {
+	fs := openFakeSession(t)
+	// The agent dies, and the pump says so; after that there is nothing to write to.
+	_ = fs.session.proc.Cmd.Process.Kill()
+	fs.watcher.waitFor(t, "the end of the process", func(event Event) bool { return event.Type == "closed" })
+
+	if err := fs.session.Send(Request{Prompt: "into the void"}); err == nil {
+		t.Fatal("a write to a dead agent reported success")
+	}
+	if running, _ := fs.session.Turn(); running {
+		t.Fatal("a message that was never written left a turn running, and no frame will ever end it")
+	}
+}
+
+// TestAWhitespaceOnlyMessageIsNoTurn: a message of spaces is no content item, so nothing is written — and a turn
+// begins at the write, so there is none (#349). It is the same fact as the tests above seen from the other side:
+// the write is what opens a turn, and a caller that wrote nothing opened nothing.
 func TestAWhitespaceOnlyMessageIsNoTurn(t *testing.T) {
 	fs := openFakeSession(t)
 	if err := fs.session.Send(Request{Prompt: "   "}); err != nil {

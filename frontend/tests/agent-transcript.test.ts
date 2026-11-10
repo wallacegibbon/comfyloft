@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { referenceBlock, referenceLine } from "@/lib/canvas/agent-references";
-import { agentIsWorking, agentRunState, resumeTurn, transcriptEvent, transcriptWindow, turnStartedAt, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
+import { agentIsWorking, agentRunState, resumeTurn, transcriptEvent, transcriptWindow, turnFromFrame, turnStartedAt, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
 import type { AgentEvent } from "@/services/api/agent";
 
 /**
@@ -260,6 +260,22 @@ describe("the instant the running turn began", () => {
     it("never lands in the future, whatever a bad frame says about the age", () => {
         // A start after `now` would make the count wait before it began; an age below zero is no age.
         expect(turnStartedAt(-4_000, 5_000)).toBe(5_000);
+    });
+
+    it("keeps the turn this page opened when a frame written before the send answers later", () => {
+        // The frame is written when the socket opens and the send follows it, so a frame that arrives after the
+        // message went out is older news — and the panel used to obey it, taking the row and its clock off the
+        // screen until the provider's first word came back (#349).
+        const mine = { startedAt: 1_000 };
+        expect(turnFromFrame(mine, null)).toBe(mine);
+        expect(turnFromFrame(mine, { startedAt: 900 })).toBe(mine);
+    });
+
+    it("takes the frame's turn when the page has none of its own", () => {
+        // A page that joins a turn somebody else's send opened: the frame is the only instant there is.
+        const stated = { startedAt: 4_000 };
+        expect(turnFromFrame(null, stated)).toBe(stated);
+        expect(turnFromFrame(null, null)).toBe(null);
     });
 });
 

@@ -4,7 +4,7 @@ import { ArrowUp, Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, Eraser,
 
 import { citationLabel, mentionResolver, referenceBlock, referenceLine, type Citation, type MentionSegment } from "@/lib/canvas/agent-references";
 import { insertSpoken } from "@/lib/canvas/agent-dictation";
-import { agentIsWorking, agentRunState, resumeTurn, textOf, transcriptEvent, transcriptWindow, turnStartedAt, type AgentRunState, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
+import { agentIsWorking, agentRunState, resumeTurn, textOf, transcriptEvent, transcriptWindow, turnFromFrame, turnStartedAt, type AgentRunState, type ToolStep, type TranscriptMessage, type TurnInstant } from "@/lib/canvas/agent-transcript";
 import { contextSegment, speedSegment } from "@/lib/canvas/agent-usage";
 import { nodeContentOf } from "@/lib/canvas/node-prompt-field";
 import { reasoningPreview } from "@/lib/canvas/reasoning-preview";
@@ -109,16 +109,18 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
      *
      * Two things set it, and they are the two ways a page can learn that a turn is running: the send that
      * opens one, and the `turn` frame for a turn that began before this page existed. That frame is the only
-     * account of the wait a reload cannot lose.
+     * account of the wait a reload cannot lose — and the send is the only account of the wait that has not
+     * reached the agent yet (#349).
      */
-    const [turn, setTurn] = useState<{ startedAt: number } | null>(null);
+    const [turn, setTurn] = useState<TurnInstant | null>(null);
     const busy = turn !== null;
     /**
      * Note that a turn is running.
      *
      * The first thing that says so wins: a message sent into a turn already running joins it and does not
      * restart its clock (#342), and a frame from a turn this page did not open is a turn whose real start the
-     * `turn` frame states, or has just stated — so this never overwrites an age the session gave.
+     * `turn` frame states — so this never overwrites an age the session gave. The same rule, read from the
+     * other side, is `turnFromFrame`: a frame that arrives after a send is older news than the send (#349).
      */
     const beginTurn = () => {
         const startedAt = performance.now();
@@ -136,10 +138,11 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
      * How many seconds this turn has been running.
      *
      * The tick is this side's — one subtraction, re-rendering this row and nothing else, because the
-     * transcript below is memoised — but the start is the session's, so a page that comes back mid-turn counts
-     * from where the turn began instead of from where it came back (#342). A counter that keeps climbing is
-     * what tells a reader the difference between an agent that is thinking and a panel that is doing nothing
-     * at all: the same seconds with no motion is what a hang looks like.
+     * transcript below is memoised — and the start is the turn's: the send, when this page made it, and the
+     * session's age when the page joined a turn that began before it existed, so a reload counts from where the
+     * turn began instead of from where it came back (#342, #349). A counter that keeps climbing is what tells a
+     * reader the difference between an agent that is thinking and a panel that is doing nothing at all: the
+     * same seconds with no motion is what a hang looks like.
      */
     const [waited, setWaited] = useState(0);
     useEffect(() => {
@@ -294,7 +297,12 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
             // turn's age when the frame was written, and reading it against this page's own clock is what
             // makes a reload continue the count instead of restarting it (#342). The queue travels with it for
             // the same reason: a page that comes back is told how many messages are waiting (#345).
-            setTurn(event.running ? { startedAt: turnStartedAt(event.elapsedMs, performance.now()) } : null);
+            //
+            // And it cannot take away a turn this page opened: the frame was written when the socket opened,
+            // before the server read a word of what this page sent, so `turnFromFrame` keeps the send's turn
+            // and its clock — the wait for the provider is exactly what the row is there for (#349).
+            const stated = event.running ? { startedAt: turnStartedAt(event.elapsedMs, performance.now()) } : null;
+            setTurn((current) => turnFromFrame(current, stated));
             setSteering(event.queued ?? 0);
             if (event.running) setMessages(resumeTurn);
             return;
@@ -306,10 +314,11 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
         }
         if (event.type === "done") setTurn(null);
         if (event.type === "error") {
-            // The agent's answer about the message itself. A message it could not take never becomes a task, so
-            // no `done` is coming and the row would stand over nothing for as long as the panel is open. A
-            // failure *inside* a turn is followed by its own `done` a frame later, which makes this redundant
-            // rather than wrong (#342).
+            // The agent's answer about the message itself. A refusal ends the turn the send opened, and the
+            // session says `done` with it (#349) — this is the same fact one frame nearer, and it is what keeps
+            // the row from standing over a turn that is over for as long as a `done` takes to arrive. A failure
+            // *inside* a turn is followed by its own `done` a frame later, which makes this redundant rather
+            // than wrong (#342).
             setTurn(null);
         }
         if (event.type === "closed") {

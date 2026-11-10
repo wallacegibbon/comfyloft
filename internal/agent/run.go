@@ -82,16 +82,21 @@ func splitForPrompt(prompt string) []string {
 
 // turnChange is what one frame did to the turn in flight.
 //
-// A turn is the agent's, and so are its two ends: `beginTask` broadcasts the task as running before the work
-// starts, and `handleTaskDone` broadcasts it as over when the task goroutine returns — for every task, an error
-// included. That is why this side reads the turn off these frames instead of assuming one from what it wrote: a
-// message the agent refuses never becomes a task at all, and a command (`:continue`) starts one this side never
-// asked for (#342).
+// A turn begins at the send — the message is out, and the wait for its first word is already the wait on
+// screen (#349) — and these are the agent's answers to it. Its two ends are its own: `beginTask` broadcasts
+// the task as running before the work starts, and `handleTaskDone` broadcasts it as over when the task
+// goroutine returns, for every task, an error included. That is why this side reads those frames instead of
+// assuming them from what it wrote: a command (`:continue`) starts a task nothing here asked for.
+//
+// Two frames are about a message that will not be worked on at all, and they are what `turnStopped` reports:
+// the agent refuses one (`SM error`, no task, no task-end) and drops one it had accepted but never started
+// (the answer to a cancel, a `notify`, and no other frame). Nothing else would ever end those turns.
 type turnChange int
 
 const (
 	turnUnchanged turnChange = iota
 	turnBegan
+	turnStopped
 	turnEnded
 )
 
@@ -128,8 +133,17 @@ func turnStep(state *startup, frame *Frame, emit func(Event)) turnChange {
 		}
 	case TagCmdOutput:
 		// A command's answer. A command is not a turn — `:continue` answers its `CO` and *then* runs a task,
-		// which announces itself — so this changes nothing here.
+		// which announces itself — so this changes nothing here, with one exception: a cancel the agent
+		// accepted. It stopped a task (whose own task-end frame is the end of that turn) or dropped a prompt
+		// it had accepted and never started (which gets no frame at all but this answer and a `notify`), and
+		// the session is what tells those apart (#349).
 		id, ok, message := commandOutput(frame.Value)
+		if id == cancelCommandID {
+			if ok {
+				return turnStopped
+			}
+			return turnUnchanged
+		}
 		if id != commandID {
 			return turnUnchanged
 		}
@@ -192,8 +206,11 @@ func turnStep(state *startup, frame *Frame, emit func(Event)) turnChange {
 			}
 		case "error":
 			// A message the agent could not take (a malformed frame, a task it could not start) is an error
-			// and no task: there is nothing running to end, which is why this does not touch the turn.
+			// and no task: nothing will ever announce this turn's end, so the frame is reported as what it is
+			// — the message coming back. A failure *inside* a turn the agent took arrives here too, and the
+			// session leaves that turn alone: its own `done` is a frame away (#349).
 			emit(systemError(data))
+			return turnStopped
 		default:
 			state.collect(kind, data)
 		}
@@ -203,3 +220,8 @@ func turnStep(state *startup, frame *Frame, emit func(Event)) turnChange {
 
 // commandID tags the command this request carries, so its CO is told apart from anything else.
 const commandID = "1"
+
+// cancelCommandID tags a cancel. It is not `commandID`: a cancel is the user's stop button rather than one of
+// the settings a request carries, so its answer is not that request's and it is read for its own sake — it is
+// how a prompt that never became a task is known to be gone (#349).
+const cancelCommandID = "cancel"

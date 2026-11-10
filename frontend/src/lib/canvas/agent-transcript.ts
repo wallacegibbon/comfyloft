@@ -152,6 +152,11 @@ export function agentIsWorking(messages: TranscriptMessage[], busy: boolean): bo
 }
 
 /**
+ * A turn in flight, as a page holds it: where this page's clock read when the turn began.
+ */
+export type TurnInstant = { startedAt: number };
+
+/**
  * When the turn in flight began, as this page's clock reads it.
  *
  * `elapsedMs` is how long the turn had already been running when the session said so — the `turn` frame it
@@ -162,6 +167,23 @@ export function agentIsWorking(messages: TranscriptMessage[], busy: boolean): bo
  */
 export function turnStartedAt(elapsedMs: number | undefined, now: number): number {
     return now - Math.max(0, elapsedMs ?? 0);
+}
+
+/**
+ * The turn a page shows, when the session states its own — the `turn` frame a connection opens with.
+ *
+ * `mine` is the turn this page opened by sending a message, and `stated` is what the frame says as an instant on
+ * this page's clock (or nothing, for "no turn is running"). The send wins, always.
+ *
+ * The frame is written when the socket opens — the server sends its startup broadcast, the conversation and this
+ * before it reads a word the page says — so a `turn` that arrives after a send is news about the instant *before*
+ * that send. Letting it answer would take the row off the screen, and the clock with it, for exactly the stretch a
+ * reader has nothing else to go on: the wait for the provider's first word (#349). A page that joins a turn it did
+ * not start has no instant of its own, which is the case the frame is for — and where the count comes from is the
+ * frame's age read against this page's clock.
+ */
+export function turnFromFrame(mine: TurnInstant | null, stated: TurnInstant | null): TurnInstant | null {
+    return mine ?? stated;
 }
 
 /**

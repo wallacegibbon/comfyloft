@@ -11666,3 +11666,93 @@ model or mode that reads one", and a new video node still reads its own sentence
 `unreadWire`), `frontend/src/lib/canvas/node-generation-facts.ts` (`meetsMedia`),
 `frontend/src/components/canvas/canvas-node-prompt-panel.tsx` (`noReferencesHint`, `noReferencesWarning`),
 `frontend/src/i18n/locales/{en-US,zh-CN}.ts`, `frontend/tests/server-models.test.ts`.
+
+
+## 349. A turn is the message's from the write, and a frame cannot take it back
+
+**Decision** `Session.Send` records a turn as soon as a prompt is about to be written — `Request.HasPrompt`, the
+same predicate `writeRequest` writes on — so `Turn()` answers running with an age counted from that write. The
+record comes *before* the write, and is given back if the write fails: the agent can answer faster than `Send`
+returns, and a turn recorded after its own `done` had been read would be a flag nothing would ever clear. The agent's
+task frame *confirms* that turn (`confirmTurn`) instead of starting it and a task-end frame ends it; and a turn with
+no task behind it is ended by the two things that say so — an `error` before any task (the message refused) and the
+answer to a cancel that succeeded (`turnStopped`, `dropTurn`), which is how a prompt the agent accepted and never
+started comes back. Every such end publishes `done`. On the page, `turnFromFrame(mine, stated)` keeps the turn a send
+opened, so a `turn` frame can confirm a turn this page never had and can never take away the one it has. **Amends
+#342**: its "a turn is what the agent says it is" and the `Send` that "records nothing" are superseded, while the
+half that says the age is the turn's and survives a reload is the part this entry stands on.
+
+**Why** Two waits were missing from the one row that exists for them.
+
+The panel's `turn` branch set its state outright, and the frame it was obeying is written before the server reads a
+word the page says: the socket is greeted with the startup broadcast, the conversation and `running: false`, and only
+then does `readSocket` take a message. So every send that followed a connection — the first message after the panel
+opens, where the three greeting frames can still be on the wire when Enter is pressed, and every send after a
+`closed` — had the turn it had just opened wiped by news from before the send. `agentIsWorking` then had nothing to
+draw the row from until the first delta, which is exactly the shape #289 removed, one page at a time: the row was
+absent for the wait it exists for and appeared when the model spoke.
+
+The session had the same hole in a narrower window. AlayaCore's `beginTask` does announce the task before the work
+starts, so the agent's frame is normally milliseconds behind the write — but not always: a prompt the session is not
+ready for is *deferred* until MCP initialization completes (`submitPrompt` holds it in one slot and says so in a
+`notify`), and until that ends no task is announced, so a session that waited for the announcement answered "nobody
+is working" about a message the person had already sent. A reload in the ordinary gap is served by the same field:
+it is the age's only carrier, and it was the frame written before the task existed.
+
+That deferral also decides the other half of the rule: a turn opened by a send can be a turn with no task behind it,
+and something has to end it. Pressing Stop on a held prompt is handled by AlayaCore (`cancelTask` drops `s.pending`
+and answers the cancel), and the answer is the only news of it — no task frame, no task-end, so a session that
+ignored that answer would count a wait for a message that no longer exists, refuse to clear the conversation, and
+carry the same row into the next reload.
+
+**Why #342's objection does not come back with this** #342 rejected recording the turn at the write because the
+guess had cases to pay for: a picture with no words, a prompt of spaces, a refusal, a task a command started. Three
+of those are decided where the write is decided rather than guessed — `HasPrompt` is the same predicate `writeRequest`
+uses, so nothing is a turn without a write and nothing is written without a turn, and a command's task still begins
+at its own announcement. The fourth is answered by the agent: a refusal is an error before any task, a held prompt
+that is stopped is the agent's answer to the cancel, and the only thing this side adds is that both are the message
+coming back. "The message is out" and "the agent took it" were one flag in #342, which is why the send had to be
+silent; they are two here, `busy` and `announced`, and the send states the first without claiming the second.
+
+**Cost** A prompt written into a process that never reads it shows a turn until that process dies — the pump's
+`closed` releases the session, and that is where such a turn ends. A message the agent refuses shows the row for as
+long as the agent takes to say no rather than never, which is the truth of it: the message is out. An error that is
+*not* about the message — a malformed frame the agent answered — would end an unannounced row a moment before the
+task reopens it; the alternative is a turn that might never end, which is the worse of the two. The page's own start
+and the session's can differ by one round trip, and the one that survives a reload is the session's, so a page that
+refreshes a moment after sending reads a count a few milliseconds shorter than the one it was drawing. A cancel does
+not race the write: the prompt is written before it, so a task the cancel stops has announced itself by the time the
+cancel is read, and only a prompt that never became a task is dropped by that answer.
+
+**Rejected** Publishing a `turn` event whenever the session's turn changes, so the page could repair a frame it
+should never have obeyed: that is a frame on the wire per turn start, and it leaves the rule that a stale statement
+outranks a newer one in place — the row would still blink, one round trip wide, and a page that missed the frame
+would be exactly as wrong as before. Fixing only the panel: it is the visible half, but a reload during a deferred or
+a just-written prompt would still read idle, and one turn would still have two clocks with two origins. Fixing only
+the session: the page that did the sending is still contradicted by a frame written before it.
+
+**Tested** `internal/agent`: `TestAMessageIsATurnFromTheSend` (a prompt the fake agent says nothing about for a
+second is a running turn whose age grows, and the task frame a second later does not restart it);
+`TestAMessageTheAgentRefusesEndsTheTurnItOpened` (running from the send, then an error with no task ends it and
+`done` follows — a refused message left running would have kept the delete route refusing for the life of the
+process, #187); `TestAnAcceptedPromptThatIsCanceledEndsTheTurn` (a prompt the fake agent holds with a `notify`, then
+a cancel it answers — the run ends and the row comes down; without reading that answer the test times out);
+`TestAFailureInsideAnAcceptedTurnDoesNotEndIt` (an error after the announcement is the work failing,
+and the turn goes on to its own end); `TestAMessageThatCannotBeWrittenIsNoTurn` (the write fails, the turn it opened
+is given back); `TestAWhitespaceOnlyMessageIsNoTurn` and `TestAnImageOnlyMessageIsATurn` unchanged in substance.
+`internal/server`: `TestAMessageIsATurnBeforeTheAgentSaysSo` — a message goes in, the fake agent stays silent for a
+second, the socket is dropped, and the next connection is told `running` with an age of at least the time since the
+send, where before it was told `running: false`. `go test ./internal/...` in full.
+`frontend/tests/agent-transcript.test.ts` (`turnFromFrame`: a page's own turn survives a frame that says none and one
+that says an earlier start, a page with no turn takes the frame's, and a frame with no turn leaves none);
+`npx vitest run`, `npx tsc --noEmit`, `npm run check`. The panel's wiring has no automated test of its own — there is
+no DOM harness in this tree — so `turnFromFrame`'s two cases and the two call sites are what stands behind it; the
+browser was not re-measured for this entry.
+
+**Where** `internal/agent/sessions.go` (`Send`, `beginTurn`, `confirmTurn`, `dropTurn`, `endTurn`, `clearTurn`,
+`Cancel`, the pump's switch, `announced`), `internal/agent/run.go` (`turnChange`, `turnStopped`, `cancelCommandID`,
+the error branch and the command-output branch), `internal/agent/session_test.go` (the fake agent's `wait first`,
+`refuse`, `fail inside` and `hold this` prompts, its answer to a cancel, and the tests),
+`internal/server/agent_e2e_test.go`, `docs/server.md`, `frontend/src/lib/canvas/agent-transcript.ts` (`TurnInstant`,
+`turnFromFrame`), `frontend/src/components/canvas/canvas-agent-panel.tsx` (the `turn` branch, the `turn` state's
+type, the comments above `beginTurn`, the tick and the error branch), `frontend/tests/agent-transcript.test.ts`.
