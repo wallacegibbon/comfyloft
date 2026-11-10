@@ -37,3 +37,24 @@ that needs a word back and is not a `tool` call the page can run.
 `:tool_confirm`/`:tool_decline` command down, the shape MCP's own confirmation already has — or refuse to start
 when the flag is configured, so the gap is named at startup instead of found as a turn that never ends. The
 second is the smaller change and the honest one while no surface exists to answer with.
+
+---
+
+## 3. A mode's media declaration swallows its family's
+
+**Symptom** None in the shipped registry today, and that is why it is worth writing down: `image-qwen21` declares
+nothing on the family, so nothing can be lost yet. The moment a family declares a kind its modes do not — a clip
+limit on the base, an audio limit on the base — every mode of it loses that declaration.
+
+**Cause** `mergeVariant` replaces the whole contract rather than the kinds a variant names
+(`internal/workflow/registry.go`): `if variant.Accepts != nil { merged.Accepts = variant.Accepts }`. Qwen's four
+modes each declare `images` and nothing else, so a family-level `videos: {"max": 0}` would vanish under all four
+and a clip wired into an edit node would be accepted by `PlanMedia`, dropped by `applyArrayBinding` (which
+truncates to `max`, and here has no socket to wire it into), and answered with a run that never read it — the
+picture-silence of #348, one kind over, in a place a per-entry test cannot see.
+
+**Fix to decide** Merge the contract a kind at a time, so an unnamed kind falls back to the family's — the
+reading `mergeVariant`'s own comment describes ("a variant is a different graph, so it may declare a different
+media/mode contract"), kept per field. The alternative is to make every variant restate every kind it means,
+which is one more place per mode to forget; the derived test in `shipped_media_test.go` checks the effective
+contract of each mode, so either answer is caught the day it is wrong.

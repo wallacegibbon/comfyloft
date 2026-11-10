@@ -11604,3 +11604,65 @@ keeps the stated limit.
 
 **Where** `internal/agent/events.go` (`startup.event`, `startup.activeModel`), `internal/agent/startup_test.go`,
 `docs/server.md`.
+
+
+## 348. A workflow says whether it reads a picture, and silence is not one
+
+**Decision** Every shipped workflow — and every mode of one — whose bindings read no picture declares
+`"images": {"max": 0}` with a `note`, and the registry is held to that by a test derived from the bindings rather
+than from a list of ids: a declared zero may sit only on a graph no binding reads a picture into, and a graph no
+binding reads a picture into must declare the zero. `connect` states the consequence when the wire it just made is
+the one that takes a target past what its workflow reads; `requiresClause` learned that a declared `max: 0` is a
+maximum and not an absent one, so `read_node` and `read_prompt` stop describing a words-only node with a picture
+wired into it as ready to press. The panel's disabled reference button says so in its own kind's words: a film's
+alternatives are first/last frame and multi-reference, a picture's are the edit models and modes, and one sentence
+for both told an image node to switch to a video workflow's mode. On the wire the zero is written as no maximum at
+all (`MediaLimit.Max` is `omitempty`), so what reaches the canvas is `{"images": {}}`; every reader of it normalizes
+an absent maximum to zero — `acceptsOf`, `normalizeAccepts`, and the panel's `canTakeMedia` — and that is now pinned
+by a test, because "no contract" and "takes none" are one empty object apart.
+
+**Why** `PlanMedia` refuses media a workflow declares it does not take, and an undeclared kind is deliberately
+unconstrained (`media.go`), so an image workflow need not describe video and audio. Six of the thirteen shipped
+entries declared nothing at all, and the most-used text-to-image graph was one of them: a picture wired into a
+Z-Image node passed the maximum check because there was no maximum, no binding read the upload, and the run came
+back as a fresh draw with no error anywhere. The canvas had already promised otherwise in `connect`'s own
+description — "a picture connected into an image node is what makes its next generation an edit of it" — so one
+tool promised an edit and the workflow silently made something else. That is worse than a refusal, because a
+refusal can be read: the agent was told it had succeeded.
+
+**Cost** Six `accepts` blocks in `registry.json`, and every new workflow that draws from words alone has to say so
+— the test will not let it stay silent. A canvas that already has a picture wired into a words-only node is now
+refused at the press where it used to generate: the state was always wrong, and this is the first time it is said.
+`connect`'s answer grows one clause, on exactly the wires that cannot be read.
+
+**Rejected** Three, all of which looked like the smaller change:
+- **An `accepts` block written by hand for the entries a list named.** The list is what rots, and it was wrong on
+  the first draft of this entry: `image-qwen21` declares nothing and *does* read pictures (its base graph is the
+  edit graph), so "no declaration means no media" would have written a false one onto it. The rule is derived from
+  the bindings, so a workflow is covered the day it is registered.
+- **`set_node` refusing a media mismatch, or a gate in the page before submitting.** Both are #313's rejected
+  second copy of `PlanMedia`, and both would report failure for a write that landed: the model *is* changed, and
+  the wire is the right one the moment the node is pointed at a workflow that reads it.
+- **Requiring clip and sound declarations as well.** An undeclared kind is the three-state reading the rest of this
+  build uses (#256, #304), and a picture is the one pairing the canvas gives a meaning to.
+
+**Tested** `internal/workflow/shipped_media_test.go`: the rule both ways over all thirteen entries and all four
+Qwen modes, the `unsupported_media` code `PlanMedia` answers a picture with, and a note on every graph that refuses
+one. Deleting the new `accepts` from `image-z-image-turbo` fails it with the sentence that names the declaration.
+`frontend/tests/canvas-agent-tools.test.ts`: `connect` into a words-only workflow (the note, and not an error), into
+one that reads the picture, past a declared four, into a text card, and into a workflow that declares nothing.
+`frontend/tests/node-generation-facts.test.ts`: one picture against `max: 0`, which the old check read as no limit
+at all. `frontend/tests/server-models.test.ts`: the wire shape a declared zero actually has (`{"images": {}}`),
+which is what the panel decides "can this take a reference" from. Against a running server and the real ComfyUI at
+the time: `GET /api/workflows` publishes the declaration, a z-image run carrying one picture is refused with
+`unsupported_media` and the note, and the same run with no picture still finishes and returns its output — the
+refusal did not take the normal path with it. In the page (`bsk`, on a canvas made for the purpose): a new image
+node set to Z-Image has its reference button disabled reading "Text-to-image takes no reference media; switch to a
+model or mode that reads one", and a new video node still reads its own sentence — the two kinds do not share it.
+`go test ./...`, `make check` (506 exports), `npx tsc --noEmit`, `npm run check`, `npx vitest run` (625).
+
+**Where** `workflows/registry.json` (the six `accepts` blocks, and the Qwen `t2i` mode's `note`),
+`internal/workflow/shipped_media_test.go`, `frontend/src/lib/canvas/canvas-agent-tools.ts` (`connect`,
+`unreadWire`), `frontend/src/lib/canvas/node-generation-facts.ts` (`meetsMedia`),
+`frontend/src/components/canvas/canvas-node-prompt-panel.tsx` (`noReferencesHint`, `noReferencesWarning`),
+`frontend/src/i18n/locales/{en-US,zh-CN}.ts`, `frontend/tests/server-models.test.ts`.

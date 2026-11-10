@@ -7,6 +7,18 @@
       "type": "image",
       "file": "image-z-image-turbo.json",
       "description": "Z-Image Turbo text-to-image (4-8 step distill); bf16 base model by default with the Qwen3-4B text encoder and the ae VAE; one prompt, 4-8 steps at cfg 1.",
+      "accepts": {
+        "images": {
+          "max": 0
+        },
+        "videos": {
+          "max": 0
+        },
+        "audios": {
+          "max": 0
+        },
+        "note": "text to image: a connected picture is never read, so this is not an edit — use a workflow that takes references for that"
+      },
       "lora": {
         "filter": "Z-Image|ZIT|Kook_Zimage"
       },
@@ -1073,7 +1085,8 @@
           "accepts": {
             "images": {
               "max": 0
-            }
+            },
+            "note": "text to image: a connected picture is never read — switch to the edit mode to use one as a reference"
           }
         }
       },
@@ -1087,6 +1100,18 @@
       "description": "MOSS-Image SFT bf16 + Qwen3.5 9B + FLUX.2 VAE with a built-in 8-step DMD LoRA; 8 steps / cfg 1 / euler simple by default, tuned for speed.",
       "promptInject": "moss-layout",
       "file": "image-moss-sft-8step.json",
+      "accepts": {
+        "images": {
+          "max": 0
+        },
+        "videos": {
+          "max": 0
+        },
+        "audios": {
+          "max": 0
+        },
+        "note": "text to image: a connected picture is never read, so this is not an edit — a layout is drawn in the node's own editor, not wired in"
+      },
       "bindings": {
         "prompt": {
           "node": "4",
@@ -1525,6 +1550,9 @@
       "label": "RIFE frame interpolation",
       "description": "RIFE frame interpolation: 2× or 3× the frame rate of an existing clip. The audio track passes through. The source is assumed to be 24fps, which is what the canvas's own clips are.",
       "accepts": {
+        "images": {
+          "max": 0
+        },
         "videos": {
           "min": 1,
           "max": 1
@@ -1575,6 +1603,18 @@
       "description": "MOSS-Image Base+SFT merged with the Balanced preset (strength 1.0) as a bf16 model plus the 8-step DMD LoRA; 8 steps / cfg 1 / euler simple by default. Run the merge once first to produce moss_balanced_s100.safetensors.",
       "promptInject": "moss-layout",
       "file": "image-moss-balanced-8step.json",
+      "accepts": {
+        "images": {
+          "max": 0
+        },
+        "videos": {
+          "max": 0
+        },
+        "audios": {
+          "max": 0
+        },
+        "note": "text to image: a connected picture is never read, so this is not an edit — a layout is drawn in the node's own editor, not wired in"
+      },
       "bindings": {
         "prompt": {
           "node": "4",
@@ -1714,6 +1754,18 @@
       "description": "MOSS-Image SFT int8 convrot + Qwen3.5 INT8 text encoder + full FLUX.2 VAE + 8-step LoRA; the low-VRAM variant, with no Balanced merge.",
       "promptInject": "moss-layout",
       "file": "image-moss-sft-int8-8step.json",
+      "accepts": {
+        "images": {
+          "max": 0
+        },
+        "videos": {
+          "max": 0
+        },
+        "audios": {
+          "max": 0
+        },
+        "note": "text to image: a connected picture is never read, so this is not an edit — a layout is drawn in the node's own editor, not wired in"
+      },
       "bindings": {
         "prompt": {
           "node": "4",
@@ -1852,6 +1904,18 @@
       "type": "audio",
       "file": "audio-minimax-music-3.json",
       "description": "MiniMax Music 3 text-to-music: a style caption plus optional lyrics, FP16 DiT with the pruned int8 text encoder and the dav VAE; 30-step euler at CFG 1.7, up to 360s per song.",
+      "accepts": {
+        "images": {
+          "max": 0
+        },
+        "videos": {
+          "max": 0
+        },
+        "audios": {
+          "max": 0
+        },
+        "note": "text to music: the caption and the lyrics are the whole request — a picture or a clip wired in here is never read"
+      },
       "outputs": {
         "kind": "audio",
         "formatParam": "format",

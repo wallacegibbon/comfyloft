@@ -119,6 +119,14 @@ describe("requiresClause", () => {
         expect(requiresClause({ ...t2v, videos: { min: 0, max: 1 } }, { ...nothing, video: 2 })).toBe("it takes up to 1 clip; 2 clips connected, so a press would be refused");
     });
 
+    // A declared zero is a maximum like any other, and the one it is easiest to read as "no limit": the check
+    // was `limit.max && …`, so `max: 0` skipped the bound entirely and a words-only workflow was described as
+    // ready to press with a picture wired into it — the exact press the server then refused (#348).
+    test("a workflow that takes none is refused one, and says so", () => {
+        const t2v = { images: { min: 0, max: 0 }, videos: { min: 0, max: 0 }, audios: { min: 0, max: 0 }, minTotal: 0 };
+        expect(requiresClause(t2v, { ...nothing, image: 1 })).toBe("it takes words only; 1 image connected, so a press would be refused");
+    });
+
     test("a clip and a picture together, which is the character swap's shape", () => {
         const swap = { images: { min: 1, max: 6 }, videos: { min: 1, max: 1 }, audios: { min: 0, max: 2 }, minTotal: 2 };
         expect(requiresClause(swap, { image: 1, video: 1, audio: 0 })).toBe("it takes 1-6 images and 1 clip; 1 image and 1 clip connected");

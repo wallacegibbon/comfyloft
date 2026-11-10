@@ -310,6 +310,15 @@ function createNode(hands: CanvasHands, args: unknown): ToolAnswer {
  * Connect two nodes, the way dragging from one handle to the other does — a reference bar pick is the same
  * connection. The pair is stated in order, so the gesture starts from the source handle; the canvas decides
  * whether those two may be connected at all (a group, or a config into a config, may not).
+ *
+ * A wire is a promise about what a run will read, and the canvas makes it in this tool's own words: a picture
+ * connected into an image node is what makes its next generation an edit of it. A workflow that declares it
+ * takes no such thing cannot keep that promise — the run is accepted, nothing reads the upload, and the answer
+ * comes back as a fresh draw with nothing said anywhere. So the connection that creates the mismatch is where
+ * it is named: the pair was consistent before this call and is not after it.
+ *
+ * It is not an error. The connection is real and is the right one the moment the node is set to a workflow that
+ * reads it, so refusing the call would be refusing a state the panel allows and the user can reach.
  */
 function connect(hands: CanvasHands, args: unknown): ToolAnswer {
     const input = (typeof args === "object" && args ? args : {}) as { fromNodeId?: unknown; toNodeId?: unknown };
@@ -322,10 +331,35 @@ function connect(hands: CanvasHands, args: unknown): ToolAnswer {
     if (hands.connections().some((connection) => connection.fromNodeId === from.id && connection.toNodeId === to.id)) {
         return { content: [textBlock(`${from.id} -> ${to.id} is already connected`)], isError: false };
     }
+    // What is wired in front of the target *before* this wire: the count is what says whether this call is the
+    // one that takes the target past what its workflow reads.
+    const wired = connectedMedia(to.id, hands);
     if (!hands.connectNodes(from.id, to.id, "source")) {
         return { content: [textBlock(`this canvas will not connect ${from.id} (${from.type}) to ${to.id} (${to.type})`)], isError: true };
     }
-    return { content: [textBlock(`connected ${from.id} -> ${to.id}${saidTwice(to.id, nodePromptOf(to), nodes, [...hands.connections(), { id: `${from.id}->${to.id}`, fromNodeId: from.id, toNodeId: to.id }])}`)], isError: false };
+    const unread = unreadWire(hands, to, from, wired);
+    return { content: [textBlock(`connected ${from.id} -> ${to.id}${unread}${saidTwice(to.id, nodePromptOf(to), nodes, [...hands.connections(), { id: `${from.id}->${to.id}`, fromNodeId: from.id, toNodeId: to.id }])}`)], isError: false };
+}
+
+/** The declaration's own name for each kind of media node, which is how a contract names what it takes. */
+const MEDIA_CONTRACT_KEY: Record<keyof MediaCounts, "images" | "videos" | "audios"> = { image: "images", video: "videos", audio: "audios" };
+
+/**
+ * What this wire cannot be, when the target's workflow declares it takes no such thing.
+ *
+ * The bound is the one `PlanMedia` enforces and `requiresClause` words — a declared maximum, and `max: 0` as
+ * the way "takes none" is spelled — so the sentence here is the sentence `read_node` prints, rather than a
+ * second reading of the same declaration that could drift from the refusal.
+ */
+function unreadWire(hands: CanvasHands, to: CanvasNodeData, from: CanvasNodeData, before: MediaCounts): string {
+    if (!MEDIA_TYPES.includes(from.type)) return "";
+    const kind = from.type as keyof MediaCounts;
+    const media = hands.nodeContract(to.id).media;
+    const limit = media?.[MEDIA_CONTRACT_KEY[kind]];
+    if (!media || !limit) return "";
+    const after = { ...before, [kind]: before[kind] + 1 };
+    if (after[kind] <= (limit.max ?? Infinity)) return "";
+    return `; note: ${requiresClause(media, after)}`;
 }
 
 /**

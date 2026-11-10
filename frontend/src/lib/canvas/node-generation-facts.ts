@@ -194,7 +194,9 @@ function meetsMedia(accepts: ModelAccepts, counts: MediaCounts) {
     for (const [kind, limit] of pairs) {
         if (!limit) continue;
         if (counts[kind] < limit.min) return false;
-        if (limit.max && counts[kind] > limit.max) return false;
+        // A declared maximum is a maximum even when it is zero: `max: 0` is how a workflow says it takes none
+        // (`media.go`), and reading it as "no limit" let a press through that the server then refused.
+        if ((limit.max ?? Infinity) < counts[kind]) return false;
     }
     const total = counts.image + counts.video + counts.audio;
     return total >= (accepts.minTotal || 0);

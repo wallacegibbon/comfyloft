@@ -700,6 +700,8 @@ export default {
             sentPromptHide: "Sent · hide",
             videoTextAddDisabled: "Text-to-video takes no reference media; switch to First & last frame or Multi-ref",
             videoTextRefsWarning: "Text-to-video does not accept images, video, or audio. Disconnect references or switch to First & last frame / Multi-ref.",
+            imageAddDisabled: "Text-to-image takes no reference media; switch to a model or mode that reads one",
+            imageRefsWarning: "This workflow takes words only, so a connected picture is not read. Switch to a model or mode that reads one, or disconnect it.",
             material: "Material, not something this canvas generated",
             materialHint:
                 "Nothing recorded here can be re-run, so there is no send button and no model to pick: a picture this canvas did not make is material. To use it, connect it to a node as a reference, or open one of its card's tools (crop, split, upscale, angle), which make a new node.",

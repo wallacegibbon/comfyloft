@@ -418,6 +418,74 @@ describe("read_node: what the next run is set to", () => {
     });
 });
 
+/**
+ * What a wire cannot make true.
+ *
+ * The canvas states the meaning of a picture into an image node in `connect`'s own description — "what makes
+ * its next generation an edit of it" — and a workflow that declares `images: {max: 0}` cannot keep it: the
+ * request is accepted, no binding reads the upload, and the run comes back as a fresh draw with nothing said
+ * anywhere (#348). The connection is the call that makes the pair inconsistent, so the sentence is said here,
+ * and it is `requiresClause`'s — the one `read_node` prints — rather than a second reading of the declaration.
+ */
+describe("connect: a wire the target's workflow will not read", () => {
+    const wordsOnly = { media: { images: { min: 0, max: 0 }, videos: { min: 0, max: 0 }, audios: { min: 0, max: 0 }, minTotal: 0 } };
+    const editor = { media: { images: { min: 1, max: 4 }, videos: { min: 0, max: 0 }, audios: { min: 0, max: 0 }, minTotal: 0 } };
+    const picture = (id: string) => placed(id, "image", { content: `/api/canvases/c/files/${id}.png` });
+    const connects = (hands: CanvasHands) => void (hands.connectNodes = () => true);
+
+    test("a picture into a workflow that takes words only says so, and is not an error", async () => {
+        const { hands } = handsFor([picture("image-1"), placed("image-2", "image", { prompt: "a brass compass" })], [], wordsOnly);
+        connects(hands);
+
+        const { answer, text } = await textOf(hands, "connect", { fromNodeId: "image-1", toNodeId: "image-2" });
+
+        expect(answer.isError).not.toBe(true);
+        expect(text).toBe("connected image-1 -> image-2; note: it takes words only; 1 image connected, so a press would be refused");
+    });
+
+    test("nothing is said when the workflow reads the picture", async () => {
+        const { hands } = handsFor([picture("image-1"), placed("image-2", "image", { prompt: "make it night" })], [], editor);
+        connects(hands);
+
+        const { text } = await textOf(hands, "connect", { fromNodeId: "image-1", toNodeId: "image-2" });
+
+        expect(text).toBe("connected image-1 -> image-2");
+    });
+
+    // The bound is the declaration's, both ways: one picture past a declared four is as unread as one into a
+    // workflow that takes none, because the binding drops what it has no socket for.
+    test("the connection that goes past the declared count is named too", async () => {
+        const wired = [1, 2, 3, 4, 5].map((n) => picture(`image-${n}`));
+        const before = [1, 2, 3, 4].map((n) => ({ id: `c${n}`, fromNodeId: `image-${n}`, toNodeId: "image-9" }));
+        const { hands } = handsFor([...wired, placed("image-9", "image", { prompt: "blend these" })], before, editor);
+        connects(hands);
+
+        const { text } = await textOf(hands, "connect", { fromNodeId: "image-5", toNodeId: "image-9" });
+
+        expect(text).toBe("connected image-5 -> image-9; note: it takes 1-4 images; 5 images connected, so a press would be refused");
+    });
+
+    // A picture into a text card is a reference the card reads (#185), not a run's input: a card publishes no
+    // media contract, and nothing is claimed about what it does not declare.
+    test("a reference into a text card is the card's own business", async () => {
+        const { hands } = handsFor([picture("image-1"), textSaying(card)], [], {});
+        connects(hands);
+
+        const { text } = await textOf(hands, "connect", { fromNodeId: "image-1", toNodeId: "text-1" });
+
+        expect(text).toBe("connected image-1 -> text-1");
+    });
+
+    test("an unpublished contract claims nothing", async () => {
+        const { hands } = handsFor([picture("image-1"), placed("image-2", "image", { prompt: "a brass compass" })], [], {});
+        connects(hands);
+
+        const { text } = await textOf(hands, "connect", { fromNodeId: "image-1", toNodeId: "image-2" });
+
+        expect(text).toBe("connected image-1 -> image-2");
+    });
+});
+
 describe("read_text: the card", () => {
     test("answers with the words the node holds, whole", async () => {
         const { hands } = handsFor([textSaying(card)]);

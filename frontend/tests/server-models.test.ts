@@ -85,6 +85,14 @@ describe("modelsOf", () => {
         expect(model.accepts).toEqual({ images: undefined, videos: { min: 1, max: 1 }, audios: undefined, minTotal: 0 });
     });
 
+    // A declared zero leaves the server as no maximum at all (`MediaLimit.Max` is `omitempty`), so "this
+    // workflow takes no picture" arrives as `{"images": {}}`. Read as "no contract", the panel would be back
+    // where it was before #348: an add-reference button that accepts a picture no run reads.
+    it("reads a zero maximum the wire wrote as an empty object", () => {
+        const [model] = modelsOf(workflow({ accepts: { images: {} }, models: [{ id: "image-z-image-turbo" }] }));
+        expect(model.accepts).toEqual({ images: { min: 0, max: 0 }, videos: undefined, audios: undefined, minTotal: 0 });
+    });
+
     it("gives each mode its own contract, so a panel shows the mode's rules", () => {
         const [model] = modelsOf(
             workflow({

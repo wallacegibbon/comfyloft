@@ -90,6 +90,12 @@ export function CanvasNodePromptPanel({
     // no media at all refuses a reference, and one whose bindings never read `seconds` takes its length from
     // the clip being edited. Both used to be recognised by id (`video-h3-t2v`, `video-h3-character-swap`).
     const refusesMedia = !canTakeMedia(channelModel?.accepts);
+    // The words for a reference this workflow will not read. A film's alternatives are its own — first/last
+    // frame, multi-reference — and a picture's are its edit modes, so the sentence follows the kind instead of
+    // being one string for both: a disabled button explained in another node type's vocabulary is worse than
+    // no explanation at all.
+    const noReferencesHint = mode === "image" ? t("canvas.promptPanel.imageAddDisabled") : t("canvas.promptPanel.videoTextAddDisabled");
+    const noReferencesWarning = mode === "image" ? t("canvas.promptPanel.imageRefsWarning") : t("canvas.promptPanel.videoTextRefsWarning");
     const sourceVideoReference = mentionReferences.find((reference) => reference.kind === "video");
     const sourceVideoNode = sourceVideoReference ? nodes.find((item) => item.id === sourceVideoReference.nodeId) : undefined;
     const sourceVideoDurationSeconds = sourceVideoNode?.metadata?.durationMs && sourceVideoNode.metadata.durationMs > 0 ? sourceVideoNode.metadata.durationMs / 1000 : undefined;
@@ -150,7 +156,7 @@ export function CanvasNodePromptPanel({
             return;
         }
         if (textVideoHasReferences) {
-            toast.warning(t("canvas.promptPanel.videoTextRefsWarning"));
+            toast.warning(noReferencesWarning);
             return;
         }
         commitPrompt(draft);
@@ -242,16 +248,8 @@ export function CanvasNodePromptPanel({
             onPointerDown={(event) => event.stopPropagation()}
             onWheel={(event) => event.stopPropagation()}
         >
-            <CanvasNodeReferenceBar
-                nodeId={node.id}
-                nodes={nodes}
-                connectedNodes={connectedNodes}
-                onDisconnect={onDisconnectReference}
-                onStartSelection={onStartReferenceSelection}
-                addDisabled={refusesMedia}
-                addDisabledHint={t("canvas.promptPanel.videoTextAddDisabled")}
-            />
-            {textVideoHasReferences ? <div className="mb-2 text-xs leading-4 text-[#ef4444]">{t("canvas.promptPanel.videoTextRefsWarning")}</div> : null}
+            <CanvasNodeReferenceBar nodeId={node.id} nodes={nodes} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} addDisabled={refusesMedia} addDisabledHint={noReferencesHint} />
+            {textVideoHasReferences ? <div className="mb-2 text-xs leading-4 text-[#ef4444]">{noReferencesWarning}</div> : null}
             <textarea
                 ref={textareaRef}
                 value={draft}
@@ -328,9 +326,9 @@ export function CanvasNodePromptPanel({
                             onStartReferenceSelection?.(nodeId);
                         }}
                         addDisabled={refusesMedia}
-                        addDisabledHint={t("canvas.promptPanel.videoTextAddDisabled")}
+                        addDisabledHint={noReferencesHint}
                     />
-                    {textVideoHasReferences ? <div className="mb-2 text-xs leading-4 text-[#ef4444]">{t("canvas.promptPanel.videoTextRefsWarning")}</div> : null}
+                    {textVideoHasReferences ? <div className="mb-2 text-xs leading-4 text-[#ef4444]">{noReferencesWarning}</div> : null}
                     <textarea
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
