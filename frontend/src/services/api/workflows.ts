@@ -82,7 +82,14 @@ export type ServerWorkflow = {
     description?: string;
     category?: string | null;
     parameters?: WorkflowParameter[];
-    availability?: WorkflowAvailability;
+    /**
+     * The server's verdict, or `null` when no scan has judged this workflow yet.
+     *
+     * Null is not "cannot run": the server only has no verdict when it could not ask ComfyUI, and
+     * then nothing runs anyway. Offering the model is the honest answer, and a run reports what
+     * actually happened (decisions #351).
+     */
+    availability?: WorkflowAvailability | null;
     /** The variant modes an image workflow offers (`t2i`, `edit`, `inpaint`, `outpaint`). */
     variantModes?: string[];
     variantLabels?: Record<string, string>;

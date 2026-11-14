@@ -11807,3 +11807,52 @@ one `userConfig` both defaults hang off), `internal/store/speech.go` (`SpeechPro
 `internal/store/store_test.go`, `internal/server/{e2e_test.go,routes_speech_test.go}`, `docs/server.md`,
 `README.md`, `frontend/src/{lib/speech-profiles.ts,components/settings/speech-profiles-section.tsx}`,
 `frontend/src/i18n/locales/{en-US,zh-CN}.ts`.
+
+
+## 351. A scan that has not run is not a scan that said no
+
+**Decision** `setup.Manager.WorkflowStatus` answers with a verdict *and* whether one exists, and
+`GET /api/workflows` writes `"availability": null` for a workflow no scan has judged. The canvas's rule is
+unchanged — leave out only what the server says cannot run — because it always was. The boot scan is retried
+with backoff until it lands, and `Scan` returns the cause of a failed attempt instead of swallowing it.
+
+**Why** ComfyUI is external and nothing waits for it (`start.sh`): the server boots while the GPU box is
+asleep, and the first scan fails. That failure was permanent — the scan ran once, `degrade()` kept the (empty)
+in-memory verdicts, and every workflow then reported `{available: false, problems: [{type: "scan", message:
+"this workflow has not been scanned yet"}]}`. The canvas leaves out a workflow whose verdict is false, so all
+thirteen disappeared: the picker was empty, the agent's `list_models` said "none configured on this canvas", and
+a session was spent looking for a configuration that was fine while ComfyUI had been answering in 18 ms. Two
+days of that. The lie was the server's: "nothing was asked" is knowledge about us, not a property of the
+workflow, and the two must not be spelled the same way.
+
+**Cost** One more return value where a verdict is read (the wire, and the install panel's deliberately
+conservative default), a `null` case in the client's type, and a boot goroutine that lives as long as ComfyUI
+stays down (one log line per distinct reason, not per attempt). A workflow with no verdict is offered even
+though the install may not be able to run it — but that state only exists while ComfyUI cannot be asked, and
+then no run can succeed anyway; a refused run reports ComfyUI's own error rather than a guess.
+
+**Rejected**
+- **Keep the fabricated verdict and special-case `type: "scan"` in the canvas.** Puts a server meaning in the
+  client, and every other reader of `/api/workflows` — the MCP bridge, curl, the next client — stays lied to.
+- **Persist the verdicts and reuse them across a boot.** A stale `available: true` is worse than "unknown": it
+  invites a run that must fail. `persist()` wrote `data/setup-status.json` and nothing ever read it; it is gone.
+- **Lazy scan on the read path** (the `ReloadIfChanged` pattern). A scan takes up to a minute, so the read either
+  blocks or spawns unthrottled work — a poller with extra state. The boot retry has no request-path coupling and
+  converges with no client asking.
+- **A permanent poller.** A scan can register graphs, rewriting `workflows/registry.json`, which must not happen
+  behind whoever is editing it. The retry stops at the first verdict, and an attempt that fails writes nothing.
+- **Gating `POST /api/runs` on availability.** A stale verdict would refuse runs that would work; the route stays
+  verdict-free, and the docs now say so instead of claiming the scan refuses a submission.
+
+**Tested** `internal/setup`: `TestAFailedScanLeavesNoVerdict` — an unreachable ComfyUI returns an error, phase
+`degraded`, and no verdict at all; `TestScanKeepsAWorkflowWhoseVariantModeIsBlocked` still reads a real one.
+`internal/server`: `TestWorkflowsReportANullVerdictForAWorkflowNoScanHasJudged` — a row no scan has seen carries
+`"availability": null` while a judged one carries its verdict. `frontend/tests/server-models.test.ts`: "offers a
+workflow no scan has judged" — `null` and absent both offer the model. Live on `:8191` with `COMFY_URL` pointed
+at a closed port: 13 rows, 13 nulls, 11 model ids, one warning; a forwarder started afterwards ended in
+`setup scan ready: 13/13` on the next attempt, with 14 model ids.
+
+**Where** `internal/setup/setup.go` (`WorkflowStatus`, `Start`), `internal/setup/scan.go` (`Scan`, `degrade`),
+`internal/server/routes_admin.go`, `internal/resource/resource.go`, `frontend/src/services/api/workflows.ts`,
+`frontend/tests/server-models.test.ts`, `internal/setup/scan_test.go`, `internal/server/setup_report_test.go`,
+`docs/server.md`, `docs/protocol.md`.

@@ -53,6 +53,13 @@ describe("modelsOf", () => {
         expect(modelsOf(workflow({ availability: { available: false } }))).toEqual([]);
     });
 
+    it("offers a workflow no scan has judged", () => {
+        // Null and absent both mean the server had nothing to say — not that the workflow cannot run.
+        // Reading either as "cannot run" emptied every model picker while ComfyUI was up (decisions #351).
+        expect(modelsOf(workflow({ availability: null }))).toHaveLength(1);
+        expect(modelsOf(workflow({ availability: undefined }))).toHaveLength(1);
+    });
+
     it("offers a tool workflow, tagged, instead of hiding it", () => {
         // An interpolation takes a clip, not a prompt — so it must not be a *default* (see
         // `defaultModelOptions`), but a node can be one, and hiding it is what made the canvas

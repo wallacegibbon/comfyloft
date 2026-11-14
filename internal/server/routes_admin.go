@@ -9,6 +9,7 @@ import (
 
 	"comfyloft/internal/config"
 	"comfyloft/internal/httpx"
+	"comfyloft/internal/setup"
 	"comfyloft/internal/sysinfo"
 	"comfyloft/internal/util"
 	"comfyloft/internal/workflow"
@@ -187,6 +188,10 @@ func (s *Server) handleResourceReplacement(ctx *httpx.Ctx) error {
 // concept — a workflow is the thing that runs, and a base model is one of its inputs — but the id
 // *spelling* (`img-zit-int8`) is built by the server and resolved by the server, so the server has
 // to report it. `/v1/models` used to be the only place that happened, wrapped in an OpenAI envelope.
+//
+// `availability` is `null` for a workflow no scan has judged. That is not "cannot run": the canvas
+// offers the model and lets a run report what happened, because the only way to have no verdict is
+// to have been unable to ask ComfyUI — and nothing runs then anyway (decisions #351).
 func (s *Server) handleWorkflows(ctx *httpx.Ctx) error {
 	s.registry.ReloadIfChanged()
 	projected := s.registry.List()
@@ -194,8 +199,8 @@ func (s *Server) handleWorkflows(ctx *httpx.Ctx) error {
 
 	type row struct {
 		workflow.PublicEntry
-		Availability interface{}      `json:"availability"`
-		Models       []map[string]any `json:"models"`
+		Availability *setup.Availability `json:"availability"`
+		Models       []map[string]any    `json:"models"`
 	}
 	rows := make([]row, 0, len(projected))
 	for _, entry := range projected {
@@ -204,9 +209,13 @@ func (s *Server) handleWorkflows(ctx *httpx.Ctx) error {
 		// already has, and asking per workflow would be a second round trip for it. Clients
 		// that only want names ignore the field.
 		entry.Parameters = s.enrichParameters(entry.Parameters)
+		var availability *setup.Availability
+		if verdict, ok := s.setup.WorkflowStatus(entry.ID); ok {
+			availability = &verdict
+		}
 		rows = append(rows, row{
 			PublicEntry:  entry,
-			Availability: s.setup.WorkflowStatus(entry.ID),
+			Availability: availability,
 			Models:       models[entry.ID],
 		})
 	}

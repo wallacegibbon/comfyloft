@@ -128,8 +128,8 @@ func TestScanRegistersAGraphNamedAfterItsType(t *testing.T) {
 	if entry.File != "image-my-flow.json" {
 		t.Errorf("entry file = %q, want the file itself", entry.File)
 	}
-	if availability := manager.WorkflowStatus("image-my-flow"); !availability.Available {
-		t.Errorf("availability = %+v, want the scan to have cleared it", availability)
+	if availability, ok := manager.WorkflowStatus("image-my-flow"); !ok || !availability.Available {
+		t.Errorf("availability = %+v (known: %v), want the scan to have cleared it", availability, ok)
 	}
 	if names := fileNames(t, workflowsDir); len(names) != 2 {
 		t.Errorf("workflows directory = %v, want only the graph and registry.json", names)
@@ -233,9 +233,9 @@ func TestScanKeepsAWorkflowWhoseVariantModeIsBlocked(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 
-	availability := manager.WorkflowStatus("image-qwen")
-	if !availability.Available {
-		t.Fatalf("availability = %+v, want available: the blocked graph is a mode, not the workflow", availability)
+	availability, known := manager.WorkflowStatus("image-qwen")
+	if !known || !availability.Available {
+		t.Fatalf("availability = %+v (known: %v), want available: the blocked graph is a mode, not the workflow", availability, known)
 	}
 	if len(availability.ModeProblems["inpaint"]) == 0 {
 		t.Errorf("modeProblems = %v, want the inpaint gap reported", availability.ModeProblems)
@@ -249,5 +249,39 @@ func TestScanKeepsAWorkflowWhoseVariantModeIsBlocked(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("missing nodes = %v, want InpaintCropImproved among them", status.Missing.Nodes)
+	}
+}
+
+// A scan that could not reach ComfyUI invents no verdict, and says that it failed.
+//
+// This is the state a whole canvas was stuck in: ComfyUI is external and nothing waits for it, so a
+// server started before the GPU box answered had no verdict for any workflow — and a fabricated
+// "not scanned yet" verdict made every model picker empty with nothing a reader could act on
+// (decisions #351).
+func TestAFailedScanLeavesNoVerdict(t *testing.T) {
+	root := t.TempDir()
+	workflowsDir := filepath.Join(root, "workflows")
+	if err := os.MkdirAll(workflowsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeGraph(t, workflowsDir, "image-my-flow.json", imageGraph())
+	registryJSON := `{"version": 1, "workflows": [{"id": "image-my-flow", "name": "image-my-flow", "type": "image", "file": "image-my-flow.json"}]}`
+	if err := os.WriteFile(filepath.Join(workflowsDir, "registry.json"), []byte(registryJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing is listening on port 1, so the scan fails the way it fails on a machine whose GPU box
+	// is asleep: before it can ask ComfyUI anything.
+	manager, _ := newScanManager(t, workflowsDir, logx.NewWithWriter("test", &bytes.Buffer{}), "http://127.0.0.1:1")
+
+	status, err := manager.Scan()
+	if err == nil {
+		t.Fatal("Scan reported success for an unreachable ComfyUI")
+	}
+	if status.Phase != "degraded" {
+		t.Errorf("phase = %q, want degraded", status.Phase)
+	}
+	if availability, known := manager.WorkflowStatus("image-my-flow"); known {
+		t.Errorf("availability = %+v (known) after a failed scan: nothing was asked, so nothing is known", availability)
 	}
 }

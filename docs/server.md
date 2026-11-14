@@ -182,6 +182,16 @@ no automatic import of ComfyUI's workflow folder. To add a graph made in ComfyUI
 scan with `POST /api/resources/refresh` — the refresh button in the canvas's _Add workflows_ window.
 One scan both registers the graph and clears its availability, which is why it is the only scan
 route: no "scan only the workflow folder" endpoint, no reload endpoint and no background poller.
+The boot scan is the one exception to "no poller", and only until it lands: ComfyUI is external and
+nothing waits for it (`start.sh`), so a server started while the GPU box was asleep had no verdict
+to report, and one failed attempt used to be the last word for as long as the process ran. It is
+retried with backoff (5 s, doubling, capped at a minute) and stops at the first success; an attempt
+that fails writes nothing.
+
+**A workflow no scan has judged carries `"availability": null`**, never a verdict. Null is "we could
+not ask ComfyUI" — the canvas offers the model anyway, because nothing runs while ComfyUI is
+unreachable, and a run that fails says so. Only a scan's own answer (`available: false` with its
+problems) takes a model off a picker (decisions #351).
 
 The file name _is_ the workflow's identity, and it has to say what it is:
 

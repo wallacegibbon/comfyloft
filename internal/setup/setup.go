@@ -89,8 +89,7 @@ type Manager struct {
 	logger        *logx.Logger
 	mainModelFile func(workflowID string) string
 
-	statusFile string
-	aliasFile  string
+	aliasFile string
 
 	mu        sync.Mutex
 	status    Status
@@ -140,7 +139,6 @@ func New(opts Options) *Manager {
 		comfy:             opts.Comfy,
 		logger:            opts.Logger,
 		mainModelFile:     mainModelFile,
-		statusFile:        filepath.Join(opts.Config.DataDir, "setup-status.json"),
 		aliasFile:         filepath.Join(opts.Config.DataDir, "model-aliases.json"),
 		aliases:           map[string]string{},
 		auto:              map[string]map[string]string{},
@@ -209,17 +207,21 @@ func (m *Manager) HasScanned() bool {
 	return m.hasScanned
 }
 
-// WorkflowStatus returns the cached verdict, defaulting to a "not scanned" problem.
-func (m *Manager) WorkflowStatus(id string) Availability {
+// WorkflowStatus returns the cached verdict for one workflow, and whether a scan ever made one.
+//
+// The second answer is the point. A workflow no scan has judged has no verdict, and no verdict is
+// not "cannot run": a caller that reads it as one drops the model and reports an empty picker. That
+// is exactly what a server whose first scan failed did to every canvas — ComfyUI is external and
+// nothing waits for it, so a boot before the GPU box answered made "this workflow has not been
+// scanned yet" look like a property of the workflow (decisions #351).
+func (m *Manager) WorkflowStatus(id string) (Availability, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if entry, ok := m.available[id]; ok {
-		return *entry
+	entry, ok := m.available[id]
+	if !ok {
+		return Availability{}, false
 	}
-	return Availability{
-		Available: false,
-		Problems:  []Problem{{Type: "scan", Message: "this workflow has not been scanned yet"}},
-	}
+	return *entry, true
 }
 
 // LoraNames returns the installed LoRA files.
@@ -400,7 +402,13 @@ func (m *Manager) SetModelAlias(entry map[string]any) (Status, error) {
 	if err := util.WriteFileAtomic(m.aliasFile, append(payload, '\n')); err != nil {
 		return m.Status(), err
 	}
-	return m.Scan()
+	// The alias is on disk either way, so the rescan that makes it visible is best-effort: ComfyUI being
+	// unreachable does not undo the choice, and the Status this returns carries the phase and the cause
+	// for a panel to show. A failed alias write above is the error worth returning (decisions #351).
+	if _, scanErr := m.Scan(); scanErr != nil {
+		m.logger.Warn("rescan after a model alias failed: %s", scanErr)
+	}
+	return m.Status(), nil
 }
 
 // PickModelFile opens a native file chooser and returns a model-relative path.
@@ -493,17 +501,42 @@ func preferredRoot(roots []string) string {
 	return roots[0]
 }
 
-// Start kicks off the initial scan.
+// Start gets the first availability verdict, and keeps asking until ComfyUI answers.
 //
 // There is no background poller: the scan is expensive (it asks ComfyUI for its whole
-// object_info) and, because Registry.Scan registers the graphs it finds, it also rewrites
+// object_info) and, because Registry.Scan registers the graphs it finds, it can rewrite
 // workflows/registry.json — which must not happen behind the back of whoever is editing
-// that file. A rescan happens at boot, on POST /api/resources/refresh, after a resource install or
-// a model switch, and when the panel's refresh button is used.
+// that file. "Boot" therefore lasts until the first verdict lands rather than one attempt:
+// ComfyUI is external and nothing waits for it (start.sh), so a server started while the GPU
+// box was asleep kept "this workflow has not been scanned yet" for as long as it ran, with no
+// model on any canvas. An attempt that fails writes nothing, and the first success hands the
+// scan back to the paths that ask for one: POST /api/resources/refresh, a resource install, a
+// model switch, and the panel's refresh button.
 func (m *Manager) Start() {
+	if m.comfy == nil {
+		return
+	}
 	go func() {
-		if _, err := m.Scan(); err != nil {
-			m.logger.Warn("initial setup scan failed: %s", err)
+		delay := 5 * time.Second
+		lastError := ""
+		for {
+			if m.HasScanned() {
+				return
+			}
+			if _, err := m.Scan(); err == nil {
+				return
+			} else if message := err.Error(); message != lastError {
+				// One line per distinct reason: a box that stays off for a night is retried, not narrated.
+				m.logger.Warn("setup scan has no verdict yet, retrying: %s", message)
+				lastError = message
+			}
+			time.Sleep(delay)
+			if delay < time.Minute {
+				delay *= 2
+				if delay > time.Minute {
+					delay = time.Minute
+				}
+			}
 		}
 	}()
 }

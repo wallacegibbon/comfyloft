@@ -2,7 +2,6 @@ package setup
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"regexp"
 	"sort"
@@ -39,6 +38,10 @@ func dedupeProblems(problems []Problem) []Problem {
 
 // Scan refreshes the whole availability view from ComfyUI.
 //
+// A scan that cannot reach ComfyUI records the degraded state, keeps the last good verdicts, and
+// returns the cause: a caller decides whether the failure is worth a line, and one that ignores the
+// error still gets a Status describing what is known.
+//
 // Only one scan runs at a time: the canvas can trigger a manual scan while the
 // startup scan is still going, and two concurrent scans would fight over the
 // registry while it is being rewritten.
@@ -55,7 +58,6 @@ func (m *Manager) Scan() (Status, error) {
 	m.status.ScannedAt = nil
 	m.status.LastError = nil
 	m.mu.Unlock()
-	m.persist()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -210,7 +212,6 @@ func (m *Manager) Scan() (Status, error) {
 	m.scanning = false
 	m.mu.Unlock()
 
-	m.persist()
 	m.logger.Info("setup scan ready: %d/%d workflows, %dms",
 		counts.Available, counts.Total, time.Since(started).Milliseconds())
 	return m.Status(), nil
@@ -258,8 +259,13 @@ func (m *Manager) noteComfyVersion(version string) {
 }
 
 // degrade records a failed scan without discarding the last good availability data.
+//
+// The cause is returned rather than logged: whether a failure deserves a line depends on who asked.
+// The boot retry says so once per distinct reason; a refresh's answer already carries the phase.
+//
+// `ScannedAt` is left alone: it says when a scan last answered, and an attempt that never reached
+// ComfyUI answered nothing. `LastError` and `ScanDurationMs` describe the attempt.
 func (m *Manager) degrade(cause error, started time.Time) (Status, error) {
-	scannedAt := util.NowIso()
 	message := util.Truncate(cause.Error(), 500)
 
 	m.mu.Lock()
@@ -267,30 +273,10 @@ func (m *Manager) degrade(cause error, started time.Time) (Status, error) {
 	m.status.ComfyReachable = false
 	m.status.LastError = &message
 	m.status.ScanDurationMs = time.Since(started).Milliseconds()
-	m.status.ScannedAt = &scannedAt
 	m.scanning = false
 	m.mu.Unlock()
 
-	m.persist()
-	m.logger.Warn("setup scan degraded: %s", message)
-	return m.Status(), nil
-}
-
-// persist writes the scan result so the canvas can show it before the first scan
-// of the next boot completes.
-func (m *Manager) persist() {
-	m.mu.Lock()
-	snapshot := m.status
-	m.mu.Unlock()
-
-	data, err := json.MarshalIndent(snapshot, "", "  ")
-	if err != nil {
-		m.logger.Warn("failed to serialise the setup state: %s", err)
-		return
-	}
-	if err := util.WriteFileAtomic(m.statusFile, append(data, '\n')); err != nil {
-		m.logger.Warn("failed to save the setup state: %s", err)
-	}
+	return m.Status(), cause
 }
 
 // collectLoaderOptions extracts the installed file list for every loader class.

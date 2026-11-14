@@ -52,7 +52,7 @@ Every write names its canvas, and the two read paths for bytes are files of that
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/workflows` | Catalog, including availability. |
+| `GET` | `/api/workflows` | Catalog, including availability (`null` when no scan has judged a workflow). |
 | `GET` | `/api/workflows/{id}/schema` | Machine-readable inputs, media roles, outputs. |
 | `POST` | `/api/canvases/{id}/uploads` | Multipart upload of one media file into that canvas. Returns its id, which is its file name in `files/`. |
 | `POST` | `/api/canvases/{id}/runs` | Submit a run into that canvas. Always returns `202` with the run. |
@@ -274,8 +274,9 @@ id exists to remove.
   still in its canvas becomes `succeeded`, a run that was in flight becomes `failed` with an
   explanation.
 - Cancelling interrupts the ComfyUI prompt, so the GPU is actually freed.
-- A missing model or node is caught by the availability scan before submission; a run that still
-  fails records the ComfyUI error (code, message, details) on the run.
+- A missing model or node is kept out of the canvas's model picker by the availability scan; a run
+  request is not gated on that verdict, so a stale or missing one can never refuse a run that would
+  work. A run that still fails records the ComfyUI error (code, message, details) on the run.
 
 ## What the `/v1` bodies became
 

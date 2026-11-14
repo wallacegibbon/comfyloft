@@ -527,11 +527,19 @@ func (m *Manager) comfyReachable() bool {
 }
 
 // workflowStatus is one workflow's availability, and "not available" without a scan to ask.
+//
+// A pack row asks "is this installed and runnable", and a workflow no scan has judged cannot answer
+// it — so the safe direction is unchanged here. The model picker asks a different question, and
+// `GET /api/workflows` answers that one with a null verdict instead (decisions #351).
 func (m *Manager) workflowStatus(id string) setup.Availability {
 	if m.setup == nil {
 		return setup.Availability{}
 	}
-	return m.setup.WorkflowStatus(id)
+	verdict, ok := m.setup.WorkflowStatus(id)
+	if !ok {
+		return setup.Availability{}
+	}
+	return verdict
 }
 
 // workflowAvailable is workflowStatus reduced to the yes/no the pack rows use.
