@@ -10,6 +10,7 @@ import { nodeContentOf } from "@/lib/canvas/node-prompt-field";
 import { reasoningPreview } from "@/lib/canvas/reasoning-preview";
 import { toolSubjectOf } from "@/lib/canvas/tool-argument";
 import { useCanvasTheme } from "@/lib/canvas/use-canvas-theme";
+import { readDictationLanguage } from "@/lib/dictation-language";
 import { Button } from "@/components/kit/button";
 import { Dialog } from "@/components/kit/dialog";
 import { confirm } from "@/components/kit/confirm";
@@ -56,7 +57,7 @@ const TOOL_FAILED = "#ef4444";
 const MESSAGE_WINDOW = 20;
 
 export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: Props) {
-    const { t, i18n } = useTranslation();
+    const { t } = useTranslation();
     const theme = useCanvasTheme();
     const config = useEffectiveConfig();
     const agentWindow = useCanvasAgentStore((state) => state.windows[canvasId]);
@@ -471,11 +472,13 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
      * Hold `Ctrl`/`⌘` and `'` or the backquote above Tab, or hold the microphone button: the words land in
      * the box at the caret.
      *
-     * The sound's language follows the one the interface is written in, which is a hint and not a
-     * constraint — the model answers in the language it hears either way (`services/api/speech.ts`).
+     * The language the recording is labelled with is the one chosen in the preferences window, read at the moment
+     * of the request so a change takes effect on the next press. It is not the interface's language: #239 assumed
+     * the hint was advisory and so safe to guess, and that turned out to be true of only one of the models this
+     * workspace talks to (`lib/dictation-language.ts`, #352).
      */
     const speech = useHoldToTalk({
-        transcribe: (samples, sampleRate) => transcribeSpeech(config, samples, sampleRate, i18n.language?.toLowerCase().startsWith("zh") ? "zh" : "en"),
+        transcribe: (samples, sampleRate) => transcribeSpeech(config, samples, sampleRate, readDictationLanguage()),
         onWords: insertSpeech,
     });
 

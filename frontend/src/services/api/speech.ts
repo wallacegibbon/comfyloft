@@ -68,14 +68,15 @@ export type SpeechProfileInput = {
  * Samples and their rate go in — the WAV is written here, so the caller never holds a file format. An empty
  * transcript (silence, or a cough) comes back as an empty string: that is an answer, not a failure.
  *
- * The request carries the recording and one hint: which language was being spoken. Where it goes is the
- * server's business, so nothing in this call can name a different speech server than the active profile.
+ * The request carries the recording and one other thing: the language the user chose to speak into the
+ * microphone (`lib/dictation-language.ts`). Where it goes is the server's business, so nothing in this call can
+ * name a different speech server than the active profile.
  */
 export async function transcribeSpeech(server: Server, samples: Float32Array, sampleRate: number, language: string, options: { signal?: AbortSignal } = {}): Promise<string> {
     const body = new FormData();
-    // The language is a hint about the sound, so it follows the words the interface is written in. It is only a
-    // hint: the model answers in the language it hears either way (measured — English audio with a Chinese hint
-    // transcribes to English), so an English interface and a Chinese sentence is not a conflict.
+    // Which language to expect, as the user chose it. Not a hint the model may ignore: some servers decode
+    // strictly by this field, and leaving it out is not auto-detection — on the server this project is measured
+    // against it answers exactly like `en` (`lib/dictation-language.ts`, #352).
     body.append("language", language);
     body.append("file", new File([wavBytes(samples, sampleRate)], "speech.wav", { type: "audio/wav" }));
 

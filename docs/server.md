@@ -404,7 +404,7 @@ Workspace:
 | `PUT` | `/api/settings` | Replace them. `{settings: {...}}`. |
 | `GET` | `/api/speech/profiles` | The speech servers dictation can use: `{profiles: [{id, name, url, model, hasKey}], active}`, never a key (decisions #252). |
 | `PUT` | `/api/speech/profiles` | Write the whole list back — the page's order, so a missing entry is a deleted profile. An entry without a `key` field keeps the stored one; `""` removes it. |
-| `POST` | `/api/speech/transcriptions` | One recording in, `{text}` out. Names no server: the active profile's address, model and key are used, so a form field cannot redirect the audio (decisions #239, #252). |
+| `POST` | `/api/speech/transcriptions` | One recording in, `{text}` out. Names no server: the active profile's address, model and key are used, so a form field cannot redirect the audio (decisions #239, #252). The one field the page does supply is `language`, the choice saved in the preferences document — the server never guesses one, and does not treat an absent one as auto-detection either (#352). |
 
 The canvas, when `WEB_DIR` names one — the only endpoints here that are not under `/api`:
 
@@ -429,10 +429,10 @@ understood nodes would have to be rebuilt every time one was added.
 
 ### Preferences live with the workspace
 
-`data/settings.json` holds one document — theme, language, panel widths, the channel names and the
-model selections — that the canvas itself defines. The server checks only that it is a JSON object
-and stores it whole: a settings document with per-key endpoints would need a merge, and a merge is
-where preferences quietly lose keys.
+`data/settings.json` holds one document — theme, language, panel widths, the channel names, the model selections
+and which language dictation labels a recording with (#352) — that the canvas itself defines. The server checks
+only that it is a JSON object and stores it whole: a settings document with per-key endpoints would need a merge,
+and a merge is where preferences quietly lose keys.
 
 The theme and the language have to be applied before the first frame, so the page loads `/config.js`
 before its own bundle and the server answers it — from this document, per request (#220). A preferences

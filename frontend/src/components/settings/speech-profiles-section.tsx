@@ -4,6 +4,7 @@ import { Circle, CircleCheck, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/kit/button";
 import { Tooltip } from "@/components/kit/tooltip";
+import { DictationLanguageField } from "@/components/settings/dictation-language-field";
 import { SpeechProfileDialog } from "@/components/settings/speech-profile-dialog";
 import { emptySpeechDraft, speechDraftOf, speechProfilesPayload, type SpeechChange, type SpeechDraft } from "@/lib/speech-profiles";
 import { loadSpeechProfiles, saveSpeechProfiles, type SpeechProfilesState } from "@/services/api/speech";
@@ -136,6 +137,12 @@ export function SpeechProfilesSection() {
             )}
 
             {error ? <div className="mb-2 text-xs leading-5 text-red-500 dark:text-red-400">{error}</div> : null}
+
+            {/* Which language the recording is labelled with. It is not one of the four things this section may do
+                to the list, and it is not stored with it: the list is the server's file because a profile carries a
+                key (#252), while the language is a preference of the person talking, which survives every change to
+                the list. It is here because both answer one question — what the microphone does. */}
+            <DictationLanguageField />
 
             {editor ? <SpeechProfileDialog draft={editor.draft} editing={editor.id !== undefined} hasKey={editor.hasKey} onCancel={() => setEditor(null)} onSave={save} /> : null}
         </div>

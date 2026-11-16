@@ -820,6 +820,11 @@ export default {
             apiKeyMissing: "No key",
             protocolOpenAI: "OpenAI Chat Completion",
             protocolAnthropic: "Anthropic Messages",
+            dictationLanguage: "Dictation language",
+            dictationLanguageNote:
+                "Tells the speech server which language to expect. Some servers decode strictly by it: with the wrong choice, Chinese comes back as English or as nonsense — and with Chinese chosen, the English words inside a sentence still come out right. It takes effect on the next press of the microphone.",
+            dictationLanguageEn: "English",
+            dictationLanguageZh: "中文",
             speech: "Speech",
             speechNote:
                 "The speech servers dictation can be sent to, kept on the server in its own config file (~/.config/comfyloft/speech.json). The server makes the request, so an address only has to be reachable from the machine it runs on, and a key stays on the server. The selected one is what dictation uses.",

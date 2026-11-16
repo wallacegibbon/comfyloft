@@ -7176,6 +7176,12 @@ under `ja`, `zh`, `en` and auto; the field is advisory on this model ("Recogniti
 detect language automatically"). A wrong hint does not corrupt an answer, so the interface language is a safe
 default and one line to change if a server is ever found where it is not.
 
+**Corrected by #352** That measurement was of one model (Qwen3-ASR) and its confident answers, and the conclusion
+did not survive the other model on the same server: on SenseVoice-Small the field changes the answer, and **an
+absent `language` is not auto-detection** — it answers exactly as `en` does. An English interface over a Chinese
+sentence, which this entry waved away, is the case that breaks. The interface language is no longer the rule; it is
+only what a workspace that has never chosen gets (#352).
+
 **Where** `frontend/src/lib/{wav.ts,canvas/agent-dictation.ts}`, `frontend/src/components/canvas/canvas-agent-panel.tsx`,
 `internal/server/routes_speech.go`, `docs/server.md`.
 
@@ -7401,7 +7407,9 @@ OpenAPI spec:
 an error rather than a shrug (audio.cpp ignores what it does not know — `response_format`, `temperature`, `prompt`
 and a `bogus_field` all answered 200). `response_format` defaults to `json`, the only format `gpt-4o-transcribe`
 accepts and the only one this build reads, so configuring it would be a way to break dictation. `language` follows
-the interface and is advisory (#239). The audio is 16 kHz mono WAV, on the allowed list, and the server resamples for
+the interface and is advisory (#239) — **amended by #352**, which found the second half false (the field binds on
+at least one of the models here) and moved the choice from a guess into a preference; it is still not a field of a
+profile, for the reason #252 gives. The audio is 16 kHz mono WAV, on the allowed list, and the server resamples for
 itself. A field for any of these would be a field that can only be set wrong.
 
 **Why the key is not in the preferences document — measured, not assumed** `data/settings.json` is served whole by
@@ -7687,7 +7695,8 @@ leaves the microphone working instead of failing with nothing on screen explaini
 **What the request carries now** `file` and `language`, and nothing else. The model and the credential come from the
 active profile, so a form field cannot redirect a recording — the old route forwarded every field the page sent except
 `url` and `key`, which meant a `model` field could name a model the user never configured. `language` stays the
-page's because it is a fact about one utterance, not about the server.
+page's because it is a fact about one utterance, not about the server — which is also why #352 made it a preference
+of the speaker rather than a field added to a profile.
 
 **Two costs** A profile's address, model and `hasKey` are on the server, so the window reads them when it opens — a
 failed read says so, and Add waits for the answer, since a PUT that merges into a list the page has not seen would
@@ -11856,3 +11865,60 @@ at a closed port: 13 rows, 13 nulls, 11 model ids, one warning; a forwarder star
 `internal/server/routes_admin.go`, `internal/resource/resource.go`, `frontend/src/services/api/workflows.ts`,
 `frontend/tests/server-models.test.ts`, `internal/setup/scan_test.go`, `internal/server/setup_report_test.go`,
 `docs/server.md`, `docs/protocol.md`.
+
+
+## 352. Dictation's language is chosen, not inferred from the interface
+
+**Decision** The preferences window's speech section carries a two-value choice — 中文 / English — and every
+recording is sent with the language it selects. The value is a key in the preferences document
+(`dictationLanguage` in `data/settings.json`), read at the moment of the request. It is **not** a field of a speech
+profile, not a constant in the build, and never omitted. A workspace that has never chosen follows the language the
+interface is read in, which is what shipped before there was a control, so nothing changes for anyone who never
+opens the window. **Amends #239**, whose measurement of one model led it to call the field advisory and the
+interface a safe guess; narrows what #246 declined to make a setting.
+
+**Why — measured, on this workspace's own server** audio.cpp on `:18080`, both models it serves, one second of a
+440 Hz tone: a sound with no phonemes in it, so whatever comes back is decoding bias rather than a wrong word.
+
+| `language` | SenseVoice-Small | Qwen3-ASR-0.6B |
+| --- | --- | --- |
+| field absent | `Yeah.` | *(empty)* |
+| `en` | `Yeah.` | `.` |
+| `zh` | `我。` | `嗯。` |
+
+Two conclusions, both against #239: the field is honoured, and **omitting it is not auto-detection** — on this
+server it answers exactly as `en` does. A tone shows the bias; the report that prompted this shows the speech:
+Chinese under `en` is nonsense, and under `zh` both the Chinese and the English words mixed into it come out right.
+So no guess made in code is safe, and the one already in code is wrong for anyone reading the canvas in English.
+The hosted server was probed too (`glm-asr-2512`) and answered `#` under all three values, which says only that a
+tone is no fixture for it — a reason not to bake a value into the build, and not a reason to omit one.
+
+**Why a preference rather than a profile field** #252's rule, unchanged: the language is a fact about one
+utterance, not about the server at the address. The person at the microphone is the same person whichever profile
+is active — the machine at the desk and the hosted model in the café — so a language per profile would ask the same
+question twice and go wrong the day a third profile appears. The alternative's cost is also the reason it is cheap:
+no endpoint, no `speech.json`, no Go file changes, because the route already takes `language` from the form and
+still guesses nothing itself.
+
+**Why only two values** The two anyone here speaks. `auto` is a third whose meaning differs per server (detect on
+OpenAI, English here), and a language nobody selects is a control that can only be set wrong (#246). There is no
+"leave it unset" entry either: the dropdown always shows what the next press will send, because an absent field is
+a fourth choice and a measured bad one.
+
+**Costs, named** A shared workspace shares it, exactly as it shares the theme and the interface language (#155):
+two people dictating in different languages take turns at one dropdown. A wrong choice shows up only as wrong
+words, so the note under the control says what a wrong choice does. And the fallback keeps a bad rule alive for one
+case — a first-run English interface over a Chinese sentence, fixed the first time anyone opens the window — on
+purpose: making that fallback `zh` instead would be a claim about who the users are, which this tree has no
+measurement of.
+
+**Tested** `frontend/tests/dictation-language.test.ts`: the fallback follows the interface, a chosen value holds
+against either interface, a stored value outside the two is not honoured, and writing is one key.
+`frontend/tests/api-speech.test.ts` still pins `language` as the only field beside the file. `npm run check`
+(i18n, exports, decisions, prettier, typecheck) and `npm test`.
+
+**Where** `frontend/src/lib/dictation-language.ts` (the two values, the fallback, the setting),
+`frontend/src/components/settings/dictation-language-field.tsx`, rendered by
+`frontend/src/components/settings/speech-profiles-section.tsx` — beside the list, stored apart from it,
+`frontend/src/components/canvas/canvas-agent-panel.tsx`, `frontend/src/services/api/speech.ts` (the comment that
+carried the wrong belief), `frontend/src/i18n/locales/{en-US,zh-CN}.ts`, `docs/server.md`.
