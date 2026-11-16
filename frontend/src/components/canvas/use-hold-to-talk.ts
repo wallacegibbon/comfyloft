@@ -37,6 +37,15 @@ type Options = {
     transcribe: (samples: Float32Array, sampleRate: number) => Promise<string>;
     /** What was said, once it is known and it is not empty. */
     onWords: (text: string) => void;
+    /**
+     * A gesture has begun, before the microphone is asked for.
+     *
+     * Every outcome of a gesture is drawn inside the panel that asked for it — the "listening" line, the
+     * sentence for a microphone that could not be opened, the length cap, the words themselves. So the panel
+     * that owns a gesture has to be visible for the whole of it: a window that opened only when the words
+     * landed would leave a silent attempt, a refused microphone and a box of text nobody can read (#353).
+     */
+    onStart: () => void;
 };
 
 type HoldToTalk = {
@@ -49,7 +58,7 @@ type HoldToTalk = {
     stop: () => void;
 };
 
-export function useHoldToTalk({ transcribe, onWords }: Options): HoldToTalk {
+export function useHoldToTalk({ transcribe, onWords, onStart }: Options): HoldToTalk {
     const { t } = useTranslation();
     const [phase, setPhase] = useState<DictationPhase>("idle");
     const [error, setError] = useState("");
@@ -76,9 +85,16 @@ export function useHoldToTalk({ transcribe, onWords }: Options): HoldToTalk {
     transcribeRef.current = transcribe;
     const onWordsRef = useRef(onWords);
     onWordsRef.current = onWords;
+    const onStartRef = useRef(onStart);
+    onStartRef.current = onStart;
 
     const start = useCallback(() => {
         if (heldRef.current || busyRef.current) return;
+        // Said before anything is asked for, because everything that can go wrong from here on is reported in
+        // that window: a browser that will not open a microphone, a gesture with no sound in it, a refusal from
+        // the speech server. A gesture started in a closed window would otherwise be invisible end to end, and
+        // the words it produced would land in a box nobody can see (#353).
+        onStartRef.current();
         // A page a browser will not open a microphone on is the first thing to check: the answer is a sentence
         // about the address, not a `TypeError` from inside the recorder (#242). Nothing starts, nothing looks
         // like it started, and the microphone is never asked for.

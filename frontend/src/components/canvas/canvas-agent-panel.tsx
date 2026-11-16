@@ -458,19 +458,33 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
      */
     const caretPointRef = useRef<{ start: number; end: number } | null>(null);
 
-    /** What was said, put in at the caret — and the panel opens, because that is where the words went. */
+    /**
+     * What was said, put in at the caret — and nothing more.
+     *
+     * The words go where typing would have put them (`insertSpoken`, #239) and stop there. Sending is a separate
+     * act on purpose: a spoken sentence the user misheard has no way back once it is in the conversation — there
+     * is a stop for a turn and a clear for a history, neither of which takes a message back — so the gesture that
+     * produced it leaves the review to the person who hears it.
+     */
     const insertSpeech = (text: string) => {
         const selection = caretPointRef.current ?? { start: draft.length, end: draft.length };
         const { value, caret } = insertSpoken(draft, text, selection);
         caretPointRef.current = { start: caret, end: caret };
         caretRef.current = caret;
         setDraft(value);
+        // The panel is already open — a gesture opens it (`onStart` below). This is the one case that path
+        // cannot cover: the window closed while the recording was being transcribed, and the words belong to a
+        // box nobody can see, edit or send from.
         setOpen(canvasId, true);
     };
 
     /**
-     * Hold `Ctrl`/`⌘` and `'` or the backquote above Tab, or hold the microphone button: the words land in
-     * the box at the caret.
+     * Hold `Ctrl`/`⌘` and `'` or the backquote above Tab, or hold the microphone button: the window opens and
+     * the words land in the box at the caret.
+     *
+     * The window opens with the press rather than with the answer, because everything a gesture can produce is
+     * drawn inside it — the listening line, a microphone a browser will not open, the length cap, a refusal from
+     * the speech server (#353). What happens to the words after that is a separate act, as it is for typing.
      *
      * The language the recording is labelled with is the one chosen in the preferences window, read at the moment
      * of the request so a change takes effect on the next press. It is not the interface's language: #239 assumed
@@ -480,6 +494,7 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
     const speech = useHoldToTalk({
         transcribe: (samples, sampleRate) => transcribeSpeech(config, samples, sampleRate, readDictationLanguage()),
         onWords: insertSpeech,
+        onStart: () => setOpen(canvasId, true),
     });
 
     // --- citations --------------------------------------------------------------------------------------

@@ -7134,10 +7134,11 @@ Tab, #314), or holding the panel's microphone button, records while held and put
 on release. The server speaks
 OpenAI-compatible `POST /v1/audio/transcriptions` (a WAV in, `{"text": …}` out).
 
-**Amended by #246, #252 and #314** The address stopped being the only setting: the model name is a setting, the
+**Amended by #246, #252, #314 and #353** The address stopped being the only setting: the model name is a setting, the
 credential lives on the server, and both now come from the active profile in `data/speech.json` rather than
-travelling in the request. The hop, the WAV, the gesture and the caret are unchanged; #314 added a second key to
-the gesture — the backquote, matched in `agent-dictation.ts` — without changing what the gesture does.
+travelling in the request. The WAV, the caret and the length cap are unchanged; #314 added a second key to the
+gesture without changing what it does; #353 made the window open when the gesture starts rather than when its words
+arrive, which changes what the user can see, not what the gesture produces.
 
 **Why the browser cannot make that request** Measured against the server this was built on (audio.cpp, `model=refine`,
 Qwen3-ASR-0.6B): it answers **no CORS headers** — `OPTIONS` is a 404 and a `POST` comes back without
@@ -11922,3 +11923,43 @@ against either interface, a stored value outside the two is not honoured, and wr
 `frontend/src/components/settings/speech-profiles-section.tsx` — beside the list, stored apart from it,
 `frontend/src/components/canvas/canvas-agent-panel.tsx`, `frontend/src/services/api/speech.ts` (the comment that
 carried the wrong belief), `frontend/src/i18n/locales/{en-US,zh-CN}.ts`, `docs/server.md`.
+
+
+## 353. A gesture opens the window it belongs to, at the press
+
+**Decision** Holding the dictation chord (`Ctrl`/`⌘` + `'`, or the backquote, #239 and #314) **opens the agent
+window before anything else happens** — before the microphone is asked for. The words still land at the caret and
+nothing follows them. **Amends #239**, whose window opened when the transcript arrived.
+
+**Why the press and not the answer** Every outcome of a gesture is drawn inside the panel that asked for it: the
+"listening" line, the sentence for a browser that will not open a microphone (#242), the length-cap notice (#251),
+a refusal from the speech server, the words. Opening the window when the transcript arrived made most of those
+invisible — a closed window gave no sign that a microphone was open, no sign when a microphone was refused, and no
+way to read or edit what came back. `onStart` is called before `canOpenMicrophone()` for that reason: the refusal
+is one of the things the window exists to show.
+
+The gesture already worked with the window closed — `CanvasAgentPanel` is mounted either way, and
+`if (!open) return null` stops the drawing, not the window's key listeners — so nothing here is a new capability.
+It is feedback that has always been produced and was sometimes not shown.
+
+**What the gesture does not do** It stops at the box. Sending what was just said is deliberately not part of it:
+a sentence the user misheard has no way back out of the conversation — there is a stop for a turn and a clear for a
+history, and neither takes a message back — so a release that also sent would put the cost of a mistake on the
+person who made it with nothing to answer it. Reviewing the words belongs to the person who spoke them, which is
+why the box they land in is now on screen when they arrive.
+
+**Costs** An accidental chord in a closed canvas now opens the window, and with it an agent session: opening the
+window is what calls `openAgentSession`, so an accidental press pays for an agent startup it did not use to. That
+cost already belongs to opening the window by any other path; this only makes the window easier to open by
+accident. And a window closed while a recording is being transcribed is reopened when the words land
+(`insertSpeech` still calls `setOpen`) — the one case the press cannot cover.
+
+**Tested** Nothing new is testable: where the words go (`insertSpoken`) is unchanged and still tested in
+`frontend/tests/agent-dictation.test.ts`, and what changed is one callback added to `useHoldToTalk`, which has no
+DOM to be tested against (the suite is pure functions, `vitest.config.ts`). `npm run check` (i18n, exports,
+decisions, prettier, typecheck) and `npm test` pass. **Not yet watched in a browser**, where it wants two looks:
+the chord with the window closed (a window appears at the press, showing "listening") and a tap with nothing said
+(the window opens, nothing is sent).
+
+**Where** `frontend/src/components/canvas/use-hold-to-talk.ts` (`onStart`, called before the microphone is asked
+for), `frontend/src/components/canvas/canvas-agent-panel.tsx` (`onStart: () => setOpen(canvasId, true)`).
