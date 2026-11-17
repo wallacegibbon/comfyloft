@@ -22,11 +22,17 @@ export function buildNodeMentionReferences(node: CanvasNodeData, nodes: CanvasNo
     return labelResourceNodes(getMentionResourceNodes(node.id, nodes, connections), true);
 }
 
+/**
+ * The nodes this node may name: what is wired into it, and itself never.
+ *
+ * This used to fall back to the node itself when nothing was wired, because a card that holds a picture *is* a
+ * resource node. Nothing else answers that question the same way: the run reads `getGenerationResourceNodes`, the
+ * reference bar draws the connections, the agent counts the wires — so an unconnected picture card was the one
+ * case where the answer was its own picture, and the panel, which asks in order to refuse a press, refused its
+ * own (#355).
+ */
 function getMentionResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
-    const ownInputs = expandGroupResourceNodes(getContextInputNodes(nodeId, nodes, connections), nodes);
-    if (ownInputs.length) return ownInputs;
-    const node = nodes.find((item) => item.id === nodeId);
-    return node && isResourceNode(node) ? [node] : [];
+    return expandGroupResourceNodes(getContextInputNodes(nodeId, nodes, connections), nodes);
 }
 
 export function getGenerationResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {

@@ -12039,3 +12039,42 @@ film card asked for `9:16`.
 first), `frontend/src/pages/canvas/hooks/use-image-editors.ts` (mask, outpaint, MOSS layout, upscale and angle
 children are drawn at their run's shape), `frontend/src/pages/canvas/project.tsx` (the two creation calls, and
 `handleVideoDimensions` recording a clip's pixels without moving its card).
+
+## 355. A card is not one of its own inputs
+
+**Decision** "Is anything wired into this node?" is answered from the wires, and one answer serves every surface.
+`getMentionResourceNodes` no longer falls back to the node itself when nothing is wired into it, so the mention
+list, the reference bar, the run and the agent's tools are the same set. This is #297's rule ("a run reads only
+what is connected to it and never its own content") applied to the question that decides whether to say so.
+
+**Why** Four places ask that question and three read the graph: the run (`getGenerationResourceNodes`), the bar
+(`connectedNodesByNodeId`), the agent (`connectedMedia`). The fourth, the mention list, carried a fallback from
+the first commit — with nothing wired, return the node — and a card holding a picture *is* a resource node. So an
+unconnected card named a picture that is not connected to anything, and the prompt panel, which asks in order to
+refuse a reference its workflow will not read (#313, #348), drew that warning over an empty reference bar and
+refused its own press. The object in front of the sentence was the commonest one on the canvas: a card that had
+just been generated.
+
+**There was no wire** A card is never joined to itself and cannot be: `connectNodes` refuses before
+`normalizeConnection` answers nothing for `first.id === second.id`, and no shipped document holds such an edge.
+The extra reference was made of a fallback, not of a line — which is exactly why the screen contradicted itself:
+the bar beside the sentence was empty because the bar reads the graph.
+
+**What else was answered with it** The same list feeds three other checks in that panel — whether a connected
+card carries a mask, how long a source clip is, and the first/last-frame mode. Each now sees wired cards only,
+which is what the request does: a mask is a node of its own that the mask editor wires in
+(`use-image-editors.ts`), and `withBoundMasks` asks the connected nodes what they stand for. The one change that
+is not a correction is a text card with nothing wired in: its `@` list is empty instead of offering itself, and
+naming itself there was never something to insert.
+
+**Tested** `frontend/tests/canvas-resource-references.test.ts` (9 new): a card holding a picture, a clip, a sound
+or words and wired to nothing names nothing, and a card inside a group does too; a wired card names its input and
+never itself; a wired group is named as the children it holds; a wired card that holds nothing stays out (#230);
+words are named as words, which is how the panel tells a text input from media. The last case pins the invariant
+rather than the symptom: over five wirings, the set the panel asks with equals the set the run reads, so the two
+cannot drift again. Five of the nine fail against the fallback. `npx vitest run` (659), `npx tsc --noEmit`,
+`npm run check`. **Not watched in a browser**, where it wants one look: a generated picture card on a
+`Z-Image Turbo` node — no red line, the `+` still greyed out (that half was correct), and the press runs.
+
+**Where** `frontend/src/lib/canvas/canvas-resource-references.ts` (`getMentionResourceNodes`: the three-line
+fallback is gone; its comment says why, so it is not put back).
