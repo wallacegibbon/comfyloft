@@ -7,8 +7,7 @@ import { requestEdit, requestGeneration, requestImageAngle } from "@/services/ap
 import { uploadImage } from "@/services/image-storage";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { cropDataUrl, splitDataUrl } from "@/lib/canvas/canvas-image-data";
-import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
-import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
+import { nodeSizeFromShape } from "@/lib/canvas/canvas-node-size";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import type { CanvasImageCropRect } from "@/components/canvas/canvas-node-crop-dialog";
 import type { CanvasImageMaskEditPayload } from "@/components/canvas/canvas-node-mask-edit-dialog";
@@ -156,9 +155,9 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
                 const image = await requestEdit(generationConfig, prompt, references, { signal: controller.signal });
-                const uploaded = image;
-                const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                // The card it lands in is the one it was made for: the mask run is asked for the source's own
+                // size, so the child was drawn at the source's box and nothing here moves it (#354).
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, ...imageMetadata(image), prompt, ...generationMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.runtime.maskFailed");
@@ -191,14 +190,17 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const source = { id: node.id, name: `${node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey };
             const references = [source];
             const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, references);
+            // The outpaint dialog states the canvas it asked for, so the card is drawn at that shape now —
+            // inside the source card's box, as the result used to be fitted into it after the run. Waiting for
+            // the run to say it would resize a card that was already showing itself at the right shape (#354).
+            const askedBox = nodeSizeFromShape({ width: payload.width, height: payload.height }, node.width, node.height);
             setNodes((prev) => [
                 ...prev,
                 {
                     id: childId,
                     type: CanvasNodeType.Image,
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
-                    width: node.width,
-                    height: node.height,
+                    ...askedBox,
                     metadata: { prompt: payload.prompt, status: NODE_STATUS_LOADING, ...generationMetadata },
                 },
             ]);
@@ -210,9 +212,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
                 const image = await requestEdit(generationConfig, payload.prompt, references, { signal: controller.signal });
-                const uploaded = image;
-                const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt: payload.prompt, ...generationMetadata } } : item)));
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, ...imageMetadata(image), prompt: payload.prompt, ...generationMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.outpaint.failed");
@@ -243,14 +243,16 @@ export function useImageEditors(deps: NodeEditorDeps) {
             setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, imageMode: "layout", layout: payload } } : item)));
             const childId = nanoid();
             const generationMetadata = buildImageGenerationMetadata("generation", generationConfig, []);
+            // A layout carries the canvas it was drawn on, so the card is drawn at that shape before the run
+            // rather than resized to it afterwards (#354).
+            const askedBox = nodeSizeFromShape({ width: payload.width || 1024, height: payload.height || 1024 }, node.width, node.height);
             setNodes((prev) => [
                 ...prev,
                 {
                     id: childId,
                     type: CanvasNodeType.Image,
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
-                    width: node.width,
-                    height: node.height,
+                    ...askedBox,
                     metadata: { prompt: payload.summary, status: NODE_STATUS_LOADING, layout: payload, ...generationMetadata },
                 },
             ]);
@@ -262,11 +264,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
             try {
                 const image = await requestGeneration(generationConfig, payload.summary, { signal: controller.signal });
                 if (!image) throw new Error(t("canvas.mossLayout.noImage"));
-                const uploaded = image;
-                const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
-                setNodes((prev) =>
-                    prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt: payload.summary, layout: payload, ...generationMetadata } } : item)),
-                );
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, ...imageMetadata(image), prompt: payload.summary, layout: payload, ...generationMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.mossLayout.failed");
@@ -284,15 +282,17 @@ export function useImageEditors(deps: NodeEditorDeps) {
         (node: CanvasNodeData) => {
             if (!node.metadata?.content) return;
             const childId = nanoid();
-            const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
             setNodes((prev) => [
                 ...prev,
                 {
                     id: childId,
                     type: CanvasNodeType.Image,
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
-                    width: imageConfig.width,
-                    height: imageConfig.height,
+                    // An upscaler is handed a picture, not a size: its answer is the same picture with more
+                    // pixels in it, so the card is drawn at the source card's shape and the run only fills it
+                    // (#354, #293).
+                    width: node.width,
+                    height: node.height,
                     // The workflow, not the canvas's model: an upscale is `image-esrgan-upscale` whatever the
                     // node being upscaled was made with (#293). No params and no prompt — the model is the
                     // workflow's default until someone chooses another, and an upscaler is asked nothing —
@@ -317,7 +317,6 @@ export function useImageEditors(deps: NodeEditorDeps) {
                 return;
             }
             const childId = nanoid();
-            const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
             const title = buildAngleLabel(params);
             const prompt = buildAnglePrompt(params);
             const sourceReference = {
@@ -344,8 +343,10 @@ export function useImageEditors(deps: NodeEditorDeps) {
                     type: CanvasNodeType.Image,
                     title,
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
-                    width: imageConfig.width,
-                    height: imageConfig.height,
+                    // The re-render is of this picture, at this picture's shape: a step is given one, not a
+                    // size, so the card is drawn at the source card's box and the run only fills it (#354).
+                    width: node.width,
+                    height: node.height,
                     metadata: { prompt, status: NODE_STATUS_LOADING, ...generationMetadata },
                 },
             ]);
@@ -355,9 +356,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
                 const image = await requestImageAngle(generationConfig, prompt, params, [sourceReference], { signal: controller.signal });
-                const uploaded = image;
-                const size = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, ...imageMetadata(image), prompt, ...generationMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.runtime.generationFailed");

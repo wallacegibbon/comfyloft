@@ -8,16 +8,15 @@ import { requestEdit, requestGeneration } from "@/services/api/image";
 import { waitForRun, type Run, type RunProgress, type RunRequest } from "@/services/api/runs";
 import type { GenerateStart } from "@/lib/canvas/agent-generate";
 import { generatedAudio, generatedImage } from "@/lib/canvas/generated-media";
+import { cardBoxForRun } from "@/lib/canvas/canvas-node-size";
 import { NO_MAKER } from "@/lib/canvas/node-generation-facts";
 import { resolveModelRequestConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { imageToDataUrl, type UploadedImage } from "@/services/image-storage";
-import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
-import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
-import { audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, imageMetadata } from "@/lib/canvas/canvas-node-factory";
+import { applyGeneratedImage, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata } from "@/lib/canvas/canvas-node-factory";
 import { buildGenerationConfig, failedWatch, generationReferenceUrls, isGenerationCanceled } from "@/lib/canvas/canvas-generation-helpers";
 import { videoRunMetadata } from "@/lib/canvas/video-run-metadata";
 import { NODE_STATUS_ERROR, NODE_STATUS_LOADING, NODE_STATUS_SUCCESS } from "@/lib/canvas/canvas-node-status";
-import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/types/canvas";
+import type { CanvasConnection, CanvasNodeData } from "@/types/canvas";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import type { NodeGenerationContext } from "@/components/canvas/canvas-node-generation";
 import type { ReferenceImage } from "@/types/image";
@@ -159,24 +158,12 @@ export function useGenerationRuns(deps: GenerationRunDeps) {
      *
      * Called by the live run and by the resume path alike, which is what makes a reloaded run look like one
      * that never stopped. The picture is the file the run wrote into the canvas — nothing is copied (#173) —
-     * and the node is resized around it, because a node holds one picture and its shape is that picture's (#180).
+     * and the card it lands in is not touched: the box was decided by what the run was asked to draw, before
+     * it ran, and a result that disagrees with it is drawn inside the box rather than resizing it (#354).
      */
     const fillImage = useCallback(
         async (rootId: string, uploaded: UploadedImage) => {
-            const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
-            const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-            setNodes((prev) =>
-                prev.map((node) => {
-                    if (node.id !== rootId) return node;
-                    const center = { x: node.position.x + node.width / 2, y: node.position.y + node.height / 2 };
-                    return {
-                        ...node,
-                        position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
-                        ...imageSize,
-                        metadata: { ...node.metadata, ...imageMetadata(uploaded) },
-                    };
-                }),
-            );
+            setNodes((prev) => prev.map((node) => (node.id === rootId ? applyGeneratedImage(node, uploaded) : node)));
         },
         [setNodes],
     );
@@ -213,6 +200,10 @@ export function useGenerationRuns(deps: GenerationRunDeps) {
                     node.id === nodeId
                         ? {
                               ...node,
+                              // The card takes the shape this run was asked for *now*, before anything is
+                              // drawn: the answer goes into that box and never resizes it, so the card is the
+                              // same size before the press as after the picture lands (#354).
+                              ...cardBoxForRun(node, generationMetadata),
                               // A node regenerated in place keeps its name when the box has no words to
                               // name it by: the request was the connected text, and "【Text 1】…" is not a
                               // title.
@@ -323,7 +314,7 @@ export function useGenerationRuns(deps: GenerationRunDeps) {
             };
             // The metadata is the run's to write, not the node's to keep: a `runId` left from an earlier
             // run would make a reload resume the wrong one.
-            setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, ...(prompt ? { title } : {}), metadata: videoMetadata } : node)));
+            setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, ...cardBoxForRun(node, settings), ...(prompt ? { title } : {}), metadata: videoMetadata } : node)));
             const controller = startGenerationRequest(nodeId, nodeId, nodeId, runController);
             try {
                 await completeVideoNodeTask(nodeId, generationConfig, effectivePrompt, generationContext.referenceImages, controller.signal, {

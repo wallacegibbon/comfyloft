@@ -1,5 +1,5 @@
-import { getNodeSpec, NODE_DEFAULT_SIZE } from "@/constant/canvas";
-import { nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
+import { getNodeSpec } from "@/constant/canvas";
+import { nodeSizeForRun, type RunShapeSettings } from "@/lib/canvas/canvas-node-size";
 import { isInheritableNodeField, recallNodeSettings, rememberNodeSettings } from "@/lib/canvas/node-settings-memory";
 import { activeFileUrl } from "@/services/canvas-files";
 import { modelForWorkflow, modelIsStep, acceptedInputs, type AiConfig } from "@/stores/use-config-store";
@@ -7,25 +7,47 @@ import type { UploadedImage } from "@/services/image-storage";
 import type { UploadedFile } from "@/services/file-storage";
 import type { RunFacts } from "@/services/api/runs";
 import type { ReferenceImage } from "@/types/image";
-import { CanvasNodeType, type CanvasImageGenerationType, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId, type Position } from "@/types/canvas";
+import type { CanvasImageGenerationType, CanvasNodeData, CanvasNodeMetadata, CanvasNodeTypeId, Position } from "@/types/canvas";
 
-export function createCanvasNode(type: CanvasNodeTypeId, position: Position, metadata?: CanvasNodeMetadata): CanvasNodeData {
+/**
+ * Make one node: the card it starts with, and the settings it is born with.
+ *
+ * A card that will hold a run's picture is drawn at the shape that run is being asked for — its own `size`
+ * setting if it states one, else the canvas's, the same precedence `buildGenerationConfig` uses for those two
+ * keys. That is what makes a card the same size empty and full: the box comes from the ask, and the result is
+ * only ever put inside it. A step (an upscaler, an angle re-render) is told no size at all, so the callers that
+ * create one write its box themselves, from the picture in front of it (#354).
+ */
+export function createCanvasNode(type: CanvasNodeTypeId, position: Position, metadata?: CanvasNodeMetadata, settings?: RunShapeSettings): CanvasNodeData {
     const spec = getNodeSpec(type);
     const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const finalMetadata = { ...spec.metadata, ...(recallNodeSettings(type) || {}), ...metadata };
     rememberNodeSettings(type, finalMetadata);
+    const size = nodeSizeForRun({ type, metadata: finalMetadata }, settings);
 
     return {
         id,
         type,
         position: {
-            x: position.x - spec.width / 2,
-            y: position.y - spec.height / 2,
+            x: position.x - size.width / 2,
+            y: position.y - size.height / 2,
         },
-        width: spec.width,
-        height: spec.height,
+        width: size.width,
+        height: size.height,
         metadata: finalMetadata,
     };
+}
+
+/**
+ * Put a run's picture into the card it was asked for: the metadata changes, the box does not.
+ *
+ * The card was drawn at the shape that run was told to draw, so the picture fills it. When the graph answered
+ * with something else — a model that ignored the size it was given — the card keeps the shape that was asked
+ * for and the picture is drawn inside it: the run's disagreement shown, rather than hidden by the card quietly
+ * resizing itself (#354).
+ */
+export function applyGeneratedImage(node: CanvasNodeData, image: UploadedImage): CanvasNodeData {
+    return { ...node, metadata: { ...node.metadata, ...imageMetadata(image) } };
 }
 
 /**
@@ -137,11 +159,20 @@ export function buildAudioGenerationMetadata(config: AiConfig): CanvasNodeMetada
     };
 }
 
+/**
+ * Write a card's own run settings, and — while it is still empty — the box those settings describe.
+ *
+ * Only an empty card follows the shape of the run it is set to. A card that holds a picture is that picture's
+ * shape (#264), and a setting cannot change it; only a run that replaces the picture can, and that one keeps the
+ * box the card already has (#354). The two keys that decide a shape are `size` and, for a film, its tier: no
+ * other setting moves a card, so changing a seed or a container leaves a box the user dragged alone.
+ */
 export function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeData["metadata"]>) {
     const safePatch = patch || {};
     const next = { ...node, metadata: { ...node.metadata, ...safePatch } };
     if (Object.keys(safePatch).some(isInheritableNodeField)) rememberNodeSettings(next.type, next.metadata);
-    const spec = node.type === CanvasNodeType.Video ? NODE_DEFAULT_SIZE[CanvasNodeType.Video] : NODE_DEFAULT_SIZE[CanvasNodeType.Image];
-    const size = typeof safePatch.size === "string" && !node.metadata?.content ? nodeSizeFromRatio(safePatch.size, spec.width, spec.height) : null;
-    return size && (node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Video) ? { ...next, ...size, position: { x: node.position.x + node.width / 2 - size.width / 2, y: node.position.y + node.height / 2 - size.height / 2 } } : next;
+    if (node.metadata?.content || (typeof safePatch.size !== "string" && safePatch.vquality === undefined)) return next;
+    const size = nodeSizeForRun(next);
+    if (Math.abs(size.width - node.width) < 0.5 && Math.abs(size.height - node.height) < 0.5) return next;
+    return { ...next, ...size, position: { x: node.position.x + node.width / 2 - size.width / 2, y: node.position.y + node.height / 2 - size.height / 2 } };
 }

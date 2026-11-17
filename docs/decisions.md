@@ -11963,3 +11963,79 @@ the chord with the window closed (a window appears at the press, showing "listen
 
 **Where** `frontend/src/components/canvas/use-hold-to-talk.ts` (`onStart`, called before the microphone is asked
 for), `frontend/src/components/canvas/canvas-agent-panel.tsx` (`onStart: () => setOpen(canvasId, true)`).
+
+
+## 354. A card's box is the shape of the ask, never the shape of the answer
+
+**Decision** One rule for the size of a picture or film card, and it is settled **before** the run.
+
+- The card is drawn at the shape its run is being asked for. `requestedOutputShape` reads that shape out of the
+  two settings that decide it — a picture's `size`, a film's `size` and quality tier — through the same functions
+  the settings panels use to write their own size pills (`readMediaDimensions`, `readVideoDimensions`), and
+  `nodeSizeFromShape` fits that shape into the kind's card from `NODE_SPECS` (#337), never under
+  `NODE_MIN_SIZE` (#270). `nodeSizeForRun` asks the question once and is asked at three moments: when a card is
+  made (`createCanvasNode`, which now takes the canvas's settings, because a card that states none of its own
+  inherits them — the same precedence `buildGenerationConfig` already uses for those two keys), when a settings
+  write lands on an empty card (`applyNodeConfigPatch`), and when a run starts (`cardBoxForRun`).
+- A result never changes the box it lands in. `applyGeneratedImage` (new) and `applyGeneratedVideo` write
+  metadata and nothing else; `fillImage` no longer fits the card around the picture, and a `<video>` reporting
+  its own dimensions no longer restyles its card.
+- A step — an upscaler, an angle re-render, an interpolator — is handed a picture, not a size, so its card is
+  the source card's box, which is the shape its answer has. `cardBoxForRun` answers with nothing when the run's
+  own record states no size: that absence is how both run builders already say "this is a step" (#293).
+
+**Why** A card was two sizes. `NODE_SPECS` gave an empty one 340×240; when a square picture landed, `fillImage`
+fitted the card around it and it became 240×240. The user watched one object change size while it had nothing in
+it and again when it had something in it, and the placeholder had promised a bigger card than the picture it
+stood for. The shape was never unknowable before the run: a request states `size`, and a film's pixels are
+derived from its tier and shape (#309 refuses a size that disagrees with the tier for exactly that reason).
+Reading the shape out of the answer reads the ask twice and gets it wrong at the one moment the card is on
+screen and empty.
+
+The old rule also quietly broke the floor. Fitting a 9:16 result into a 340×240 box makes a card 135 wide, which
+no corner drag accepts and which the agent is told is impossible (#270) — the page did not obey the number it
+states to the model. Fitting the *ask* into the card, with the floor applied, is what makes the two agree.
+
+**What this makes visible** When a graph answers with a different shape from the one it was asked for — a model
+that ignores `size`, an edit whose canvas its source dictates — the card keeps the shape that was asked for and
+the picture is drawn inside it, with the info bar stating the file's own pixels. That is the run's disagreement
+shown instead of absorbed: a card that resizes to whatever came back hides the fact that the ask was not
+followed, and leaves the next run being asked for a shape nothing on screen matches.
+
+**Rejected** Settling only at the press, leaving the placeholder at the type table's size — the empty card is
+still the wrong shape while it is empty, which is what was reported. Migrating a document when it is opened — an
+empty card's box is derived from its settings, so rewriting every empty card on open would overwrite a box the
+user dragged, and the next press settles it anyway. Matching the placeholder to the eventual result instead —
+that result has not happened yet, so the same card would need two boxes, and any ask that changes mid-course
+(an outpaint, a mode switch) would still move it.
+
+**Cost** A card that holds a picture is never resized by a settings change — a node whose `size` is changed and
+then re-run draws inside the box it already has; taking a new shape there means a new ask, which the press
+settles for an empty card and a crop or outpaint decides for a filled one. A card the user dragged to some other
+shape is snapped back by the next settings write or the next press. Documents written before this keep the boxes
+their empty cards had until one of those two moments. And a film whose clip reports dimensions that disagree with
+its card is no longer corrected: the card keeps its box, and a corner drag then follows the clip's shape (#264,
+untouched — that entry is about what a drag does, and it stays true because the ask is what made the picture),
+which is the one place the two can still part.
+
+**Tested** `frontend/tests/node-card-size.test.ts` (18 new): a square ask makes a square card and not the type
+table's wide one; the offered ratios are kept, and a tall one grows to the floor instead of going under it;
+`auto`, an empty size and a bare ratio are answered the way the run answers them; the node's own setting is
+asked before the canvas's; a film's card follows the shape its tier will render and a different tier does not
+move it; a kind with no shape keeps the card its type starts with; a created card carries the box; filling a card
+leaves its box and position identical (the reported case, stated as an equality); a run that answers with another
+shape leaves the card alone; a settings write moves an empty card and never a filled one; a setting that decides
+no shape leaves a box alone; and a step's run answers with no box at all. `npx vitest run` (650),
+`npx tsc --noEmit`, `npm run check` (i18n 834/801, 191 modules, decisions, prettier). **Not watched in a
+browser**, where it wants three looks: a fresh picture card (square at the default `1:1`, and the same size the
+moment its picture lands), a tall ask (`864x1536`, a narrow card that stays that width through the run), and a
+film card asked for `9:16`.
+
+**Where** `frontend/src/lib/canvas/canvas-node-size.ts` (`requestedOutputShape`, `nodeSizeFromShape`,
+`nodeSizeForRun`, `cardBoxForRun`; `nodeSizeFromRatio` is gone), `frontend/src/lib/canvas/canvas-node-factory.ts`
+(`createCanvasNode`'s fourth argument, `applyGeneratedImage`, `applyNodeConfigPatch`),
+`frontend/src/lib/canvas/canvas-generated-video.ts` (`applyGeneratedVideo` no longer resizes or re-centres),
+`frontend/src/pages/canvas/hooks/use-generation-runs.ts` (`fillImage`, and the two presses that settle a card
+first), `frontend/src/pages/canvas/hooks/use-image-editors.ts` (mask, outpaint, MOSS layout, upscale and angle
+children are drawn at their run's shape), `frontend/src/pages/canvas/project.tsx` (the two creation calls, and
+`handleVideoDimensions` recording a clip's pixels without moving its card).

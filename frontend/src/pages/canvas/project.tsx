@@ -886,7 +886,7 @@ function InfiniteCanvasPage() {
 
     const createConnectedNode = useCallback(
         (type: string, pending: PendingConnectionCreate) => {
-            const newNode = createCanvasNode(type, pending.position, recallNodeSettings(type) || undefined);
+            const newNode = createCanvasNode(type, pending.position, recallNodeSettings(type) || undefined, { size: effectiveConfig.size, vquality: effectiveConfig.vquality });
             const insertBefore = Boolean(getNodeDefinition(type)?.insertBefore);
             // A node inserted upstream (a LoRA card, say) is created before the current node; the current node must not be treated as its upstream.
             const connection = insertBefore ? normalizeConnection(newNode.id, pending.connection.nodeId, [...nodesRef.current, newNode]) : normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode]);
@@ -902,7 +902,7 @@ function InfiniteCanvasPage() {
             setPendingConnectionCreate(null);
             setConnecting(null);
         },
-        [effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, setConnecting, t],
+        [effectiveConfig.size, effectiveConfig.vquality, setConnecting, t],
     );
 
     const cancelPendingConnectionCreate = useCallback(() => {
@@ -1076,7 +1076,9 @@ function InfiniteCanvasPage() {
     const createNode = useCallback(
         (type: CanvasNodeTypeId, position?: Position, patch?: CanvasNodeMetadata): CanvasNodeData => {
             const targetPosition = position || getCanvasCenter();
-            const newNode = createCanvasNode(type, targetPosition, patch);
+            // The card is drawn at the shape its next run is asked for — its own settings first, the canvas's
+            // otherwise — so filling it in changes only what is inside (#354).
+            const newNode = createCanvasNode(type, targetPosition, patch, { size: effectiveConfig.size, vquality: effectiveConfig.vquality });
 
             setNodes((prev) => [...prev, newNode]);
             setSelectedNodeIds(new Set([newNode.id]));
@@ -1088,7 +1090,7 @@ function InfiniteCanvasPage() {
             if (wantsPanel) setDialogNodeId(newNode.id);
             return newNode;
         },
-        [effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, getCanvasCenter],
+        [effectiveConfig.size, effectiveConfig.vquality, getCanvasCenter],
     );
 
     // The agent's hands are the same function the buttons press.
@@ -2399,20 +2401,14 @@ function InfiniteCanvasPage() {
     }, []);
     const handleVideoDimensions = useCallback((nodeId: string, width: number, height: number) => {
         if (!width || !height) return;
+        // The clip's own pixels are recorded — the info bar states them, and a corner drag follows the film's
+        // shape (#264) — but the clip does not move the card. The box was decided by what the run was asked to
+        // draw, and a `<video>` reporting its dimensions mid-playback is not a new ask (#354).
         setNodes((prev) =>
             prev.map((node) => {
                 if (node.id !== nodeId || node.type !== CanvasNodeType.Video) return node;
-                const next = fitNodeSize(width, height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-                const sameSize = Math.abs(node.width - next.width) < 0.5 && Math.abs(node.height - next.height) < 0.5;
-                const sameMeta = node.metadata?.naturalWidth === width && node.metadata?.naturalHeight === height;
-                if (sameSize && sameMeta) return node;
-                return {
-                    ...node,
-                    width: next.width,
-                    height: next.height,
-                    position: { x: node.position.x + node.width / 2 - next.width / 2, y: node.position.y + node.height / 2 - next.height / 2 },
-                    metadata: { ...node.metadata, naturalWidth: width, naturalHeight: height },
-                };
+                if (node.metadata?.naturalWidth === width && node.metadata?.naturalHeight === height) return node;
+                return { ...node, metadata: { ...node.metadata, naturalWidth: width, naturalHeight: height } };
             }),
         );
     }, []);
