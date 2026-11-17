@@ -21,9 +21,8 @@ import (
 // is spelled. An undeclared kind is not constrained, which is what keeps a workflow that only
 // cares about images from having to describe video and audio too.
 type MediaLimit struct {
-	Min   int      `json:"min,omitempty"`
-	Max   int      `json:"max,omitempty"`
-	Roles []string `json:"roles,omitempty"` // reserved for the upload protocol
+	Min int `json:"min,omitempty"`
+	Max int `json:"max,omitempty"`
 }
 
 // Accepts is a workflow's media contract.

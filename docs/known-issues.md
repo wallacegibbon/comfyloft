@@ -29,9 +29,10 @@ adapter to allow a tool call (`SM tool_confirm`) and waits for `:tool_confirm <i
 cancelled, with nothing on screen saying why.
 
 **Cause** `SpawnOptions.args` passes no `--tool-confirm`, and AlayaCore has no config-file key for one — it is a
-command-line flag only (`internal/config/config.go`, `--tool-confirm`) — so the confirmation set is empty and the
-frame is never emitted. The canvas has no surface for the question either: it is the one thing the agent can ask
-that needs a word back and is not a `tool` call the page can run.
+command-line flag only (AlayaCore's own `internal/config/config.go`, not this tree's file of the same name; the
+command line this server builds is `SpawnOptions.args()` in `internal/agent/spawn.go`) — so the confirmation set
+is empty and the frame is never emitted. The canvas has no surface for the question either: it is the one thing
+the agent can ask that needs a word back and is not a `tool` call the page can run.
 
 **Fix to decide** Either answer it — a dialog in the panel, a message up the socket, and the
 `:tool_confirm`/`:tool_decline` command down, the shape MCP's own confirmation already has — or refuse to start

@@ -12078,3 +12078,39 @@ cannot drift again. Five of the nine fail against the fallback. `npx vitest run`
 
 **Where** `frontend/src/lib/canvas/canvas-resource-references.ts` (`getMentionResourceNodes`: the three-line
 fallback is gone; its comment says why, so it is not put back).
+
+## 356. A record nothing reads is not a record
+
+**Decision** A field written into a node, a workflow or an API shape and read by nobody is deleted rather than
+kept "for later". Two of them go: `generationType` on a node's metadata, and `roles` on a declared media limit.
+
+**Why `generationType`** Every image run wrote `generationType: "edit" | "generation"` into the node it was
+filling — computed from `referenceImages.length` at the moment of the request, and then read by nothing: the
+panel resolves the mode from the model's declared modes (`imageModeFor`), the request decides the media mix from
+what is wired, the agent is told which run a node is by the workflow it recorded (`workflow`, #227), and that
+name already carries the distinction (`image-qwen21-t2i` against `image-qwen21-edit-turbo`). #228 had already
+found the field costly: it was one of the claims every per-node file replacement had to scrub, and it stayed on
+the node after the scrub. So it was a copy of a fact that is decided twice over, kept in the one place that can
+go stale — the field a future reader trusts is the one nobody computes again.
+
+**Why `roles`** `MediaLimit.Roles` was declared as `// reserved for the upload protocol` and nothing ever set it:
+no workflow in the shipped registry names the key, no Go code reads it, and the frontend's own `ModelAccepts`
+shape does not carry it. Roles are not missing because of that — a run's roles are the `media` keys of the
+request (`routes_runs.go`'s `mediaRoles`) matched against the graph's bindings — so the field reserved a place
+for a plan that was never taken while the real mechanism lived elsewhere.
+
+**Cost** A canvas written before this keeps a `generationType` key on its image nodes. Nothing reads it, the
+field was optional, and the document loader does not refuse unknown keys — the same reading that lets a node
+type this build does not have render as a missing node. Re-running such a node writes the record without it.
+
+**Tested** Nothing to test: both removals take away a write and a declaration, and every gate still holds —
+`npx vitest run` (659), `npm run check` (i18n 834/801 keys, no exports without a caller, decisions, prettier,
+tsc), `make check` (gofmt, vet, tests, deadcode: 508 exported declarations all reachable). What keeps
+`generationType` from coming back is not a test but the argument above, written where it is read.
+
+**Where** `frontend/src/types/canvas.ts` (`generationType`, `CanvasImageGenerationType`),
+`frontend/src/lib/canvas/canvas-node-factory.ts` (`buildImageGenerationMetadata`'s first parameter),
+`frontend/src/pages/canvas/hooks/use-generation-runs.ts` (the derived value),
+`frontend/src/pages/canvas/hooks/use-image-editors.ts` (three mask/outpaint/layout calls),
+`internal/workflow/media.go` (`MediaLimit.Roles`). Comments that cite a name this tree no longer has are a
+different kind of wrong, and they are answered by their own check rather than here.

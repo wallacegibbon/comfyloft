@@ -126,7 +126,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const sentMask = { id: maskNodeId, name: "mask.png", type: generationMask.mimeType || "image/png", dataUrl: generationMask.url, storageKey: generationMask.storageKey };
             const references = [source, sentMask];
             const maskBinding = sentMask.storageKey ? { mask: { storageKey: sentMask.storageKey, mimeType: sentMask.type } } : {};
-            const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, references);
+            const generationMetadata = buildImageGenerationMetadata(generationConfig, references);
             const childMetadata = { prompt, status: NODE_STATUS_LOADING, ...generationMetadata };
             setNodes((prev) => [
                 ...prev,
@@ -189,7 +189,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const childId = nanoid();
             const source = { id: node.id, name: `${node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey };
             const references = [source];
-            const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, references);
+            const generationMetadata = buildImageGenerationMetadata(generationConfig, references);
             // The outpaint dialog states the canvas it asked for, so the card is drawn at that shape now —
             // inside the source card's box, as the result used to be fitted into it after the run. Waiting for
             // the run to say it would resize a card that was already showing itself at the right shape (#354).
@@ -242,7 +242,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
             closeNodeTool();
             setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, imageMode: "layout", layout: payload } } : item)));
             const childId = nanoid();
-            const generationMetadata = buildImageGenerationMetadata("generation", generationConfig, []);
+            const generationMetadata = buildImageGenerationMetadata(generationConfig, []);
             // A layout carries the canvas it was drawn on, so the card is drawn at that shape before the run
             // rather than resized to it afterwards (#354).
             const askedBox = nodeSizeFromShape({ width: payload.width || 1024, height: payload.height || 1024 }, node.width, node.height);

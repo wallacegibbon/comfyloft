@@ -352,7 +352,7 @@ export function CanvasNodePromptPanel({
 
 /**
  * The kind a node generates. A card that holds words is not here at all: it has no panel and nothing to
- * generate, so the callers never ask — `nodeTakesPanel` is the one that says so (#278).
+ * generate, so the callers never ask — `showPanel` is the one that says so (#278).
  */
 function defaultMode(type: CanvasNodeData["type"]): CanvasGenerationMode {
     return type === CanvasNodeType.Video ? "video" : type === CanvasNodeType.Audio ? "audio" : "image";

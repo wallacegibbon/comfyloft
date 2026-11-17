@@ -41,7 +41,6 @@ export type CanvasNodeTypeId = CanvasNodeType | (string & {});
 type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
 /** What a node generates: the three kinds a workflow makes. A text node is words, so it generates nothing. */
 export type CanvasGenerationMode = "image" | "video" | "audio";
-export type CanvasImageGenerationType = "generation" | "edit";
 
 export type CanvasMossLayoutRegion = {
     id: string;
@@ -68,7 +67,6 @@ export type CanvasNodeMetadata = {
     status?: CanvasNodeStatus;
     errorDetails?: string;
     fontSize?: number;
-    generationType?: CanvasImageGenerationType;
     model?: string;
     /**
      * The workflow the server ran for this node's content, as the run named itself
@@ -111,7 +109,7 @@ export type CanvasNodeMetadata = {
      * The node's own picture is the mask drawn over the source, which is what a person needs to see;
      * what a workflow takes as `media.mask` is a different file — binary for the inpaint workflows,
      * the drawn-over picture for the ones that accept it. Binding that file here is what lets the
-     * node survive a storage cleanup (`collectImageStorageKeys` keeps anything with a `storageKey`)
+     * node survive a storage cleanup (`Store.Sweep` keeps every file the document still names)
      * and lets an inpaint run take the mask from whichever node is connected.
      */
     mask?: { storageKey: string; mimeType?: string };

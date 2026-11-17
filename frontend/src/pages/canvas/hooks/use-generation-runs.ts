@@ -182,8 +182,7 @@ export function useGenerationRuns(deps: GenerationRunDeps) {
             // reference bar — whatever is connected here is what conditions the request, nothing else.
             let referenceImages = [...new Map(generationContext.referenceImages.map((image) => [image.id, image])).values()];
             if (generationConfig.imageMode === "inpaint") referenceImages = await withBoundMasks(referenceImages, nodesRef.current);
-            const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
-            const generationMetadata = buildImageGenerationMetadata(generationType, generationConfig, referenceImages);
+            const generationMetadata = buildImageGenerationMetadata(generationConfig, referenceImages);
             const title = prompt.slice(0, 32) || "Generated Image";
             const metadata = {
                 prompt,

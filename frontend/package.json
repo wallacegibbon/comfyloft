@@ -11,7 +11,8 @@
         "check:i18n": "node scripts/check-i18n.cjs",
         "check:exports": "node scripts/check-exports.cjs",
         "check:decisions": "node scripts/check-decisions.cjs",
-        "check": "npm run check:i18n && npm run check:exports && npm run check:decisions && npm run format:check && tsc --noEmit",
+        "check:comments": "node scripts/check-comment-names.cjs",
+        "check": "npm run check:i18n && npm run check:exports && npm run check:decisions && npm run check:comments && npm run format:check && tsc --noEmit",
         "start": "vite preview --host 0.0.0.0 --port 3000",
         "format": "prettier --write .",
         "format:check": "prettier --check ."

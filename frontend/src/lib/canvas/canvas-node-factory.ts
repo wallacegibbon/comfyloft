@@ -7,7 +7,7 @@ import type { UploadedImage } from "@/services/image-storage";
 import type { UploadedFile } from "@/services/file-storage";
 import type { RunFacts } from "@/services/api/runs";
 import type { ReferenceImage } from "@/types/image";
-import type { CanvasImageGenerationType, CanvasNodeData, CanvasNodeMetadata, CanvasNodeTypeId, Position } from "@/types/canvas";
+import type { CanvasNodeData, CanvasNodeMetadata, CanvasNodeTypeId, Position } from "@/types/canvas";
 
 /**
  * Make one node: the card it starts with, and the settings it is born with.
@@ -128,14 +128,13 @@ export function buildStepNodeMetadata(config: AiConfig, workflowId: string, para
     return { ...(model ? { model } : {}), ...(accepted ? { params: accepted } : {}) };
 }
 
-export function buildImageGenerationMetadata(type: CanvasImageGenerationType, config: AiConfig, references: ReferenceImage[]): CanvasNodeMetadata {
+export function buildImageGenerationMetadata(config: AiConfig, references: ReferenceImage[]): CanvasNodeMetadata {
     const referencesOf = { references: references.map(referenceUrl).filter((url): url is string => Boolean(url)) };
     // A step — an upscaler — was given a picture and a model name, not a size, a quality or a mode. Writing
     // those would describe a run that never had them, and the node's own record is read back by the panel
     // and by the agent.
     if (modelIsStep(config, config.model)) return { model: config.model, ...(config.params ? { params: config.params } : {}), ...referencesOf };
     return {
-        generationType: type,
         model: config.model,
         size: config.size,
         quality: config.quality,
