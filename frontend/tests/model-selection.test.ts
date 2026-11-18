@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "vitest";
-import type { AiConfig } from "../src/stores/use-config-store";
+import type { AiConfig, ChannelModel } from "../src/stores/use-config-store";
 import type { CanvasNodeData } from "../src/types/canvas";
 
 // Config and i18n use browser storage during module initialization.
@@ -22,7 +22,7 @@ const { defaultConfig, defaultModelOptions, modelIsStep, acceptedInputs, resolve
 const { buildGenerationConfig } = await import("../src/lib/canvas/canvas-generation-helpers");
 const { CanvasNodeType } = await import("../src/types/canvas");
 const { videoFollowsSource, videoModelForMode } = await import("../src/lib/canvas/video-model-mode");
-const { imageModeFor } = await import("../src/lib/canvas/image-mode");
+const { imageModeFor, imageModeRefusalKey, modelForImageMode } = await import("../src/lib/canvas/image-mode");
 
 const config: AiConfig = {
     ...defaultConfig,
@@ -188,6 +188,43 @@ test("the image mode sent is one the running model declares", () => {
         { name: "beta", accepts: { images: { min: 1, max: 1 } } },
     ];
     expect(imageModeFor(withModes("inpaint", other, "image-other-family"), "replacement::image-other-family")).toBe("beta");
+});
+
+// A card's two paint verbs name a graph, so the graph is chosen by the verb: the card's own model when it
+// declares the mode, and otherwise an installed workflow that does. A picture dragged in from outside has no
+// model to inherit at all, and the workflow a card was made with may take no pictures (docs/decisions.md #357).
+test("a paint verb is answered by a workflow that declares that mode", () => {
+    const catalog = (blocked: string[] = [], withQwen = true): AiConfig => {
+        const models: ChannelModel[] = [
+            { name: "image-z-image-turbo", capability: "image", workflowId: "image-z-image-turbo", hasPrompt: true },
+            // A step (an upscaler, an angle re-render) declares no modes, so it is not an answer to a paint verb.
+            { name: "image-esrgan-upscale", capability: "image", workflowId: "image-esrgan-upscale", tool: true, hasPrompt: false },
+        ];
+        if (withQwen) {
+            models.splice(1, 0, { name: "image-qwen21", capability: "image", workflowId: "image-qwen21", hasPrompt: true, variantModes: ["t2i", "edit", "inpaint", "outpaint"], blockedModes: blocked });
+        }
+        return { ...config, imageModel: "replacement::image-z-image-turbo", channels: [{ id: "replacement", name: "Replacement", baseUrl: "https://example.com", models }] };
+    };
+
+    // Nothing to inherit — material. The canvas's own default takes no pictures, so the answer is the family that
+    // declares the mode, not the default.
+    expect(modelForImageMode(catalog(), undefined, "inpaint")).toEqual({ ok: true, model: "replacement::image-qwen21" });
+    // The same for a card made by a workflow that has no modes: the card's model is not inherited past the point
+    // where it cannot run the verb.
+    expect(modelForImageMode(catalog(), "replacement::image-z-image-turbo", "outpaint")).toEqual({ ok: true, model: "replacement::image-qwen21" });
+    // A card already running the family keeps it: choosing the graph for the verb is not a licence to move a node
+    // off the model it was built with.
+    expect(modelForImageMode(catalog(), "replacement::image-qwen21", "inpaint")).toEqual({ ok: true, model: "replacement::image-qwen21" });
+    // A mode whose own nodes are missing is no answer: the run would fail inside ComfyUI after the mask window
+    // had opened, so the press names which errand is missing instead — #311's answer for the agent, given at the
+    // press.
+    expect(modelForImageMode(catalog(["inpaint"]), undefined, "inpaint")).toEqual({ ok: false, reason: "blocked" });
+    expect(modelForImageMode(catalog(["inpaint", "outpaint"]), "replacement::image-qwen21", "outpaint")).toEqual({ ok: false, reason: "blocked" });
+    // And nothing here has the graph at all. A family that declares no modes is not asked: `imageModeFor` sends
+    // such a workflow no mode at all, so it cannot run one.
+    expect(modelForImageMode(catalog([], false), undefined, "inpaint")).toEqual({ ok: false, reason: "none" });
+    expect(imageModeRefusalKey("blocked")).toBe("canvas.runtime.modeBlocked");
+    expect(imageModeRefusalKey("none")).toBe("canvas.runtime.modeNoWorkflow");
 });
 
 // A node keeps its knobs when the model under it changes, and a knob belongs to the model that declared it. So

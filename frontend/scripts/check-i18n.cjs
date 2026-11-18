@@ -74,6 +74,11 @@ const HAND_RESOLVED = [
     // not usable, or "" for one that is — a pure function with no i18n of its own (`lib/agent-models.ts`).
     "config.preferences.modelReasoningNotJson",
     "config.preferences.modelReasoningNotObject",
+    // `t(imageModeRefusalKey(reason))`: the one sentence for a paint verb no installed workflow can run, chosen
+    // by why it cannot — no such graph, or that graph's node pack is missing. The key is written once in
+    // `lib/canvas/image-mode.ts` and read where the press is answered (`project.tsx`, `use-image-editors.ts`).
+    "canvas.runtime.modeBlocked",
+    "canvas.runtime.modeNoWorkflow",
 ];
 
 // Namespaces reached by string concatenation, declared one by one. Two forms:

@@ -498,6 +498,12 @@ export default {
             splitTitle: "Split the image by rows and columns",
             upscale: "Upscale",
             upscaleTitle: "Adds an upscale node: bigger, not clearer (for more detail, generate again on a larger canvas)",
+            // Named for the mode the run uses — the name the registry's variants carry — because the button picks
+            // the workflow by that mode rather than by the card's own model (#357).
+            inpaint: "Inpaint",
+            inpaintTitle: "Paint over the part to change; the repainted picture goes to a new node",
+            outpaint: "Outpaint",
+            outpaintTitle: "Drag or scroll to set how far it grows; the extended picture goes to a new node",
             angle: "Multi-angle",
             angleTitle: "Generate another angle",
             view: "View image",
@@ -559,6 +565,8 @@ export default {
             clear: "Clear",
             clearDescription: "This will delete every node and connection on the current canvas.",
             maskNodeNeeded: "Inpaint needs a mask: mark the area on this image with the mask tool, or connect a node that carries one",
+            modeNoWorkflow: "No workflow installed here can {{label}}: install one that can, or connect this picture to a node that runs — that run takes it as a reference",
+            modeBlocked: "{{label}} needs node packs this install does not have, so the run would fail inside ComfyUI: add them under Prepare resources",
         },
         lora: {
             none: "Not selected",
@@ -704,7 +712,7 @@ export default {
             imageRefsWarning: "This workflow takes words only, so a connected picture is not read. Switch to a model or mode that reads one, or disconnect it.",
             material: "Material, not something this canvas generated",
             materialHint:
-                "Nothing recorded here can be re-run, so there is no send button and no model to pick: a picture this canvas did not make is material. To use it, connect it to a node as a reference, or open one of its card's tools (crop, split, upscale, angle), which make a new node.",
+                "Nothing recorded here can be re-run, so there is no send button and no model to pick: a picture this canvas did not make is material. To use it, connect it to a node as a reference, or open one of its card's tools (crop, split, upscale, inpaint, outpaint, angle), which make a new node.",
         },
         toolPanel: {
             needs: "Needs {{count}} {{kind}} · {{have}} connected",

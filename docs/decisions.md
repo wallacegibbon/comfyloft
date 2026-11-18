@@ -10830,6 +10830,11 @@ chooses what the model should do with the picture: in the image settings popover
 editor (and `outpaint` opens the outpaint one). The toolbar keeps only the tools that act on the picture itself —
 info, delete, download, crop, split, upscale, angle, view.
 
+**Amended by #357** The two mode verbs are on the bar now: 局部重绘 and 扩图. What this entry refused was a button
+that ran *the card's own* graph, and that refusal holds — the pills still open the same two windows on the card's
+model, and nothing on the bar runs a mode the workflow it chose does not declare. The verbs are on the bar because
+a press can name the graph it needs and look it up, which is what the card's own model cannot be asked to be.
+
 **Why** The user asked the question the button could not answer: "inpaint 的时候才需要它，放在一个图片的通用工具条
 上面有什么用呢". The code agrees with them, and more strongly than the question assumed. A mask is not something a
 picture carries; it is an input one *mode* of one model declares. Only `image-qwen21` has it: its `inpaint` variant
@@ -12114,3 +12119,68 @@ tsc), `make check` (gofmt, vet, tests, deadcode: 508 exported declarations all r
 `frontend/src/pages/canvas/hooks/use-image-editors.ts` (three mask/outpaint/layout calls),
 `internal/workflow/media.go` (`MediaLimit.Roles`). Comments that cite a name this tree no longer has are a
 different kind of wrong, and they are answered by their own check rather than here.
+
+## 357. A paint verb names a graph, so a card's bar may offer it
+
+**Decision** A picture's bar carries its two paint verbs beside its cuts: 局部重绘 and 扩图, between 放大 and the
+angle re-render. The verb chooses the workflow — `modelForImageMode` — and the card's own model is used only when
+that model declares the mode; otherwise the search runs over the same workflow list the model pickers show,
+skipping a family whose own node pack is missing. Nothing is greyed: when no installed workflow can run the verb,
+the press says which errand is missing (no such graph, or that graph's nodes are not installed) and opens the
+preferences. Both verbs write a new card; the picture pressed on keeps what it holds. **Amends #330.**
+
+**Why** The report was one line: "外部拖进来的图片…我没办法对它进行 inpaint、outpaint". Not a missing button — a
+path that no longer exists. #297 left a material card with no model picker and no mode pills; #330 left the mask
+and outpaint windows reachable only from those pills. For a picture that arrived from outside there was no way in
+at all, and both ways round it dead-end: a card is not one of its own inputs (#355), so wiring an empty card to
+the material one answers `maskNodeNeeded` for inpaint — the mask window draws on the card it was opened from, and
+that card holds nothing — and for outpaint it opens no window whatever, so the press reads as a dead button
+(`outpaintNode?.metadata?.content` is empty). #297's own text names how material is used — "a connection, or the
+card's own tools (outpaint, mask, upscale, angle)" — and two of those four had been closed.
+
+The objection #330 wrote is real, and it is not against a button. It is against running the card's graph: every
+image workflow but one takes no pictures at all, so the run "came back as a fresh text-to-image of the sentence".
+A verb that names a graph can look one up, and the shape of that lookup is already in the tree on the film side:
+`videoModelForMode` asks each workflow which `mode` it declares instead of keeping a table of ids (#266).
+`variantModes` is a family saying which graphs it has, and `blockedModes` is the server saying a graph's own nodes
+are not installed — #311 settled what to do with that for the agent (refuse, naming the blocked list, rather than
+open the mask editor and then fail inside ComfyUI), and the settings popover marks and refuses those pills the
+same way. Asking the declaration instead of hiding the control also satisfies #267 by construction: no press can
+send a mode the running model does not declare. #297 is not touched — the workflow is recorded on the card the
+editor makes, never back onto the picture, so no press repaints material with a model the card never named.
+
+**Cost** The bar is seven wide over a picture card, and one window now has two ways in: the pills in the settings
+popover keep running the card's own model (which is right for someone working inside one family) and the bar
+chooses the family by the verb. Two surfaces, one dialog each, is cheaper than a card type that has verbs only
+when its provenance allows. The mask and outpaint editors also ask the resolver again at confirm time: the config
+can change while a window is open, and the run must not go out with a mode its model has stopped declaring.
+
+**Rejected** Greyed buttons with a hint — #330 already refused a permanently greyed button, and here the grey
+would be a claim about the machine rather than about the card, which is exactly the thing that changes when
+someone installs a node pack. Also rejected: an "edit this picture" action on the material panel that manufactures
+a generator card and wires the picture into it. It honours #330's letter, and it adds a new kind of card behaviour
+to solve a problem that is only that nobody chose a workflow. Also rejected: offering the verbs only on material
+cards, which would give two identical pictures different bars — #332's rule read backwards.
+
+**Tested** `frontend/tests/canvas-image-toolbar-tools.test.ts` (seven ids in the order the bar draws them, each
+handler handed the card it was pressed on), `frontend/tests/model-selection.test.ts` (a material card and a card
+whose workflow declares no modes both get the family that declares the verb; a card already running that family
+keeps it; a mode whose node pack is missing answers `blocked`, and a verb nothing declares answers `none` — the
+two reasons are different errands and the sentences differ). `npx vitest run` (660), `npx tsc --noEmit`,
+`npm run check` (i18n 840/807 keys, two of them now in `HAND_RESOLVED` because the key is chosen by a function),
+`npm run build`. **Not watched in a browser**, where it wants two looks: a picture dropped from the file manager —
+its bar reads 局部重绘 / 扩图, the mask window opens over it, and the answer lands in a new card wired from it —
+and the same press on an install without the inpaint node pack, which should answer once and open 偏好设置
+instead of opening a window on a run that cannot happen.
+
+**Where** `frontend/src/lib/canvas/image-mode.ts` (`modelForImageMode`, `imageModeRefusalKey`),
+`frontend/src/components/canvas/canvas-image-toolbar-tools.tsx` (the two definitions and the note saying what
+makes them not #330's button), `frontend/src/components/canvas/canvas-node-toolbar.tsx` (the two props),
+`frontend/src/pages/canvas/project.tsx` (`openImageModeTool`: the answer is given at the press),
+`frontend/src/pages/canvas/hooks/use-image-editors.ts` (`maskEditImageNode` and `outpaintImageNode` run the
+chosen model and record it on the child), `frontend/scripts/check-i18n.cjs`,
+`frontend/src/i18n/locales/{en-US,zh-CN}.ts` (`canvas.imageTools.inpaint*`/`outpaint*`,
+`canvas.runtime.modeNoWorkflow`, `canvas.runtime.modeBlocked`). The material panel's own sentence
+(`canvas.runtime.materialHint`) lists the verbs a material card has, so it gained these two: it is the only place
+that explains to a person what a card with nothing to re-run is for, and it had been corrected once already to
+drop a verb that left the bar.

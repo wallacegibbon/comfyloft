@@ -18,6 +18,8 @@ import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-ang
 import { buildImageGenerationMetadata, buildStepNodeMetadata, imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
 import { IMAGE_ANGLE_WORKFLOW, IMAGE_UPSCALE_WORKFLOW } from "@/lib/canvas/tool-workflows";
 import { buildAngleLabel, buildAnglePrompt, buildGenerationConfig, isGenerationCanceled } from "@/lib/canvas/canvas-generation-helpers";
+import { imageModeRefusalKey, modelForImageMode } from "@/lib/canvas/image-mode";
+import { serverVariantLabel } from "@/lib/server-labels";
 import { NODE_STATUS_ERROR, NODE_STATUS_IDLE, NODE_STATUS_LOADING } from "@/lib/canvas/canvas-node-status";
 import type { NodeEditorDeps } from "@/pages/canvas/hooks/node-editor-deps";
 
@@ -101,10 +103,22 @@ export function useImageEditors(deps: NodeEditorDeps) {
     const maskEditImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
-            // The only way in is a model's inpaint mode (docs/decisions.md #330), so the run is an inpaint run by
-            // definition and the mask is the binary one the workflow takes — not a picture of the marks.
+            // The verb names the graph, so the graph is chosen here rather than inherited: the card may be
+            // material (#297) or a run of a workflow that takes no pictures at all, and sending "inpaint" to one
+            // of those is #267's request for something the graph cannot do. The card's own model still wins when
+            // it declares the mode — that is the settings-popover path — and the answer is recorded on the child
+            // this run writes into, never back onto the picture (#357).
+            const wanted = modelForImageMode(effectiveConfig, node.metadata?.model, "inpaint");
+            if (!wanted.ok) {
+                toast.warning(t(imageModeRefusalKey(wanted.reason), { label: serverVariantLabel("inpaint", "inpaint") }));
+                openPreferences();
+                return;
+            }
+            // The run is an inpaint run by definition, and the mask is the binary one the workflow takes — not a
+            // picture of the marks.
             const generationConfig = {
                 ...buildGenerationConfig(effectiveConfig, node, "image"),
+                model: wanted.model,
                 count: "1",
                 size: node.metadata?.size || "auto",
                 imageMode: "inpaint",
@@ -174,8 +188,17 @@ export function useImageEditors(deps: NodeEditorDeps) {
     const outpaintImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasOutpaintPayload) => {
             if (!node.metadata?.content) return;
+            // Same rule as the mask run: 扩图 is a graph, not a setting, so the workflow that has it is chosen by
+            // the verb and recorded on the child (#357, #267).
+            const wanted = modelForImageMode(effectiveConfig, node.metadata?.model, "outpaint");
+            if (!wanted.ok) {
+                toast.warning(t(imageModeRefusalKey(wanted.reason), { label: serverVariantLabel("outpaint", "outpaint") }));
+                openPreferences();
+                return;
+            }
             const generationConfig = {
                 ...buildGenerationConfig(effectiveConfig, node, "image"),
+                model: wanted.model,
                 count: "1",
                 size: "auto",
                 imageMode: "outpaint",
@@ -223,7 +246,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, openPreferences, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, openPreferences, startGenerationRequest, t],
     );
 
     const mossLayoutImageNode = useCallback(

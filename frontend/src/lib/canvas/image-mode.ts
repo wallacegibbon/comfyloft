@@ -1,4 +1,4 @@
-import { channelModelOf, type AiConfig, type ChannelModel } from "@/stores/use-config-store";
+import { channelModelOf, resolveModelForCapability, workflowModelOptions, type AiConfig, type ChannelModel } from "@/stores/use-config-store";
 
 /**
  * The mode an image run will actually use.
@@ -42,4 +42,68 @@ function cheapestMode(model: ChannelModel) {
         if (!best || cost < best.cost) best = { mode, cost };
     }
     return best?.mode || "";
+}
+
+/** The two picture verbs a card's bar offers. Each is named for the graph it runs, not for the card it sits on. */
+export type ImageModeVerb = "inpaint" | "outpaint";
+
+type ImageModeModel = { ok: true; model: string } | { ok: false; reason: ImageModeRefusal };
+
+/** Why a verb cannot run: no workflow here has that graph, or that graph's own nodes are not installed. */
+type ImageModeRefusal = "none" | "blocked";
+
+/**
+ * Which workflow runs an image mode, found by the mode the workflow declares.
+ *
+ * The film side has had this shape since #266: `videoModelForMode` asks each workflow which `mode` it is rather
+ * than keeping a table of ids. A family's modes arrive on the same wire (`variantModes`), so a picture's two
+ * paint verbs can be answered the same way — and #357 put those verbs where a card is asked them before any
+ * model has been chosen: a picture brought in from outside records no model at all (#297), and the workflow a
+ * card was made with may read no pictures, which is what #330 watched come back "a fresh text-to-image of the
+ * sentence".
+ *
+ * The card's own model answers when it declares the mode — that is the settings-popover path, and nothing here
+ * moves a card off the model it was built with. Only when it cannot does the search go over the workflow list
+ * the pickers show, and a mode whose nodes are missing is no answer: #311 refused writing a blocked mode for the
+ * agent because it opened the mask editor and then failed inside ComfyUI, and a bar button would repeat that
+ * mistake. A family that declares no modes is not asked either — `imageModeFor` above sends such a workflow no
+ * mode at all, so it cannot run one.
+ *
+ * Whatever is chosen is recorded on the card the editor makes, never back onto the picture: material keeps being
+ * material (#297).
+ */
+export function modelForImageMode(config: AiConfig, currentModel: string | undefined, mode: ImageModeVerb): ImageModeModel {
+    const own = resolveModelForCapability(config, currentModel, "image");
+    if (runsMode(config, own, mode)) return { ok: true, model: own };
+    let blocked = false;
+    for (const value of workflowModelOptions(config, "image")) {
+        const channelModel = channelModelOf(config, value)?.model;
+        // The card's own family is searched too: when it declares the mode but its nodes are missing, "that node
+        // pack is not installed" is the sentence the person can act on, and skipping the family would send them
+        // looking for a workflow that does not exist.
+        if (!channelModel?.variantModes?.includes(mode)) continue;
+        if (channelModel.blockedModes?.includes(mode)) {
+            blocked = true;
+            continue;
+        }
+        return { ok: true, model: value };
+    }
+    return { ok: false, reason: blocked ? "blocked" : "none" };
+}
+
+/** Whether running this model would run this mode: the model has to declare the mode and have its nodes. */
+function runsMode(config: AiConfig, model: string, mode: ImageModeVerb) {
+    const channelModel = channelModelOf(config, model)?.model;
+    return Boolean(channelModel?.variantModes?.includes(mode)) && !channelModel?.blockedModes?.includes(mode);
+}
+
+/**
+ * The one sentence for a verb nothing here can run, chosen by why.
+ *
+ * Two reasons, and both are errands the person can run: install a workflow, or install a node pack. #311 settled
+ * the second one for the agent — a blocked mode is refused with the blocked list named, not run into ComfyUI to
+ * fail there — and a press on the bar answers the same way, in the caller that opens the preferences.
+ */
+export function imageModeRefusalKey(reason: ImageModeRefusal) {
+    return reason === "blocked" ? "canvas.runtime.modeBlocked" : "canvas.runtime.modeNoWorkflow";
 }

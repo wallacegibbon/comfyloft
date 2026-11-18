@@ -533,6 +533,11 @@ export default {
             splitTitle: "按行列切分图片",
             upscale: "放大",
             upscaleTitle: "新建一个放大节点：只把尺寸做大，不补细节（要更清楚请用更大的画布重新生成）",
+            // 用词和 server.variants 里那两个模式一致：按钮点的就是那条图，工作流也按那个 mode 选（#357）。
+            inpaint: "局部重绘",
+            inpaintTitle: "在图上画出要改的区域；重画出来的结果另开一个节点",
+            outpaint: "扩图",
+            outpaintTitle: "拖图 / 滚轮决定扩到哪里；扩出来的画面另开一个节点",
             angle: "多角度",
             angleTitle: "生成角度",
             view: "查看大图",
@@ -594,6 +599,8 @@ export default {
             clear: "清空",
             clearDescription: "这会删除当前画布上的所有节点和连线。",
             maskNodeNeeded: "局部重绘需要一张遮罩：用标记工具在这张图上画出区域，或连一个带遮罩的节点",
+            modeNoWorkflow: "这台机器上没有能{{label}}的工作流：先装一个能做的；或把这张图连到一个会运行的节点上当参考",
+            modeBlocked: "{{label}}需要这台机器没有安装的节点包，运行会在 ComfyUI 里失败：去「准备资源」补上",
         },
         lora: {
             none: "未选择",
@@ -737,7 +744,7 @@ export default {
             imageAddDisabled: "文生图不接参考图；要用图请切换到读取参考的模型或模式",
             imageRefsWarning: "这个工作流只读文字，连进来的图片不会被读取；请切换到读取参考的模型或模式，或断开它",
             material: "这是一份素材，不是在画布上生成的",
-            materialHint: "没有记录可重跑的东西，所以没有发送按钮，也没有模型可选：一张不是这里生成的图就是素材。要用它：把它连到一个节点当参考；或用它卡片上的工具（裁剪、切图、放大、多角度）另开一个节点。",
+            materialHint: "没有记录可重跑的东西，所以没有发送按钮，也没有模型可选：一张不是这里生成的图就是素材。要用它：把它连到一个节点当参考；或用它卡片上的工具（裁剪、切图、放大、局部重绘、扩图、多角度）另开一个节点。",
         },
         toolPanel: {
             needs: "需要 {{count}} {{kind}} · 已连 {{have}}",

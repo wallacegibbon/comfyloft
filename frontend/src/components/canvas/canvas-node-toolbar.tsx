@@ -15,6 +15,8 @@ type CanvasNodeToolbarProps = {
     onCrop: (node: CanvasNodeData) => void;
     onSplit: (node: CanvasNodeData) => void;
     onUpscale: (node: CanvasNodeData) => void;
+    onInpaint: (node: CanvasNodeData) => void;
+    onOutpaint: (node: CanvasNodeData) => void;
     onAngle: (node: CanvasNodeData) => void;
     /** Opens the node's media at its own size — the clip's button, and the picture's `view` tool both. */
     onView: (node: CanvasNodeData) => void;
@@ -23,16 +25,17 @@ type CanvasNodeToolbarProps = {
 
 /**
  * The bar over a **selected** node, and only what that *kind* of node can do (docs/decisions.md #332): a clip
- * gets interpolate, a frame grab and view, a picture gets crop/split/upscale/angle/view, a text card gets its
- * font size. What every node has — information, download, delete, duplicate, grouping — is in the right-click
- * menu, and a node with no verbs of its own (a group, an empty audio card) gets no bar at all.
+ * gets interpolate, a frame grab and view, a picture gets crop, split, upscale, the two paint verbs, an angle
+ * re-render and view, a text card gets its font size. What every node has — information, download, delete,
+ * duplicate, grouping — is in the right-click menu, and a node with no verbs of its own (a group, an empty
+ * audio card) gets no bar at all.
  *
  * Selection, not hover: it was called the hover toolbar and appeared under the pointer (#192), and since the
  * verbs became the card's own it is drawn for the one selected card, which is also the only card whose panel can
  * be open. Hovering still means something — the card under the pointer is the one the related cards light up
  * with — but that is the board's job, not this bar's.
  */
-export function CanvasNodeToolbar({ node, viewport, onDecreaseFont, onIncreaseFont, onInterpolateVideo, onCrop, onSplit, onUpscale, onAngle, onView, onCaptureVideoFrame }: CanvasNodeToolbarProps) {
+export function CanvasNodeToolbar({ node, viewport, onDecreaseFont, onIncreaseFont, onInterpolateVideo, onCrop, onSplit, onUpscale, onInpaint, onOutpaint, onAngle, onView, onCaptureVideoFrame }: CanvasNodeToolbarProps) {
     const { t } = useTranslation();
     if (!node) return null;
 
@@ -76,7 +79,7 @@ export function CanvasNodeToolbar({ node, viewport, onDecreaseFont, onIncreaseFo
                   { id: "increaseFont", title: t("canvas.nodeToolbar.increaseFont"), label: t("canvas.nodeToolbar.increaseFont"), icon: <Plus className="size-4" />, onClick: () => onIncreaseFont(node) },
               ]
             : []),
-        ...(hasImage ? buildImageToolbarTools(node, { onCrop, onSplit, onUpscale, onAngle, onViewImage: onView }) : []),
+        ...(hasImage ? buildImageToolbarTools(node, { onCrop, onSplit, onUpscale, onInpaint, onOutpaint, onAngle, onViewImage: onView }) : []),
     ];
 
     if (!tools.length) return null;

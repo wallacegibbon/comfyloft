@@ -16,7 +16,8 @@ import type { CaptureOutcome, JoinOutcome, MoveOutcome, StopOutcome } from "@/li
 import type { ModelCatalog } from "@/lib/canvas/node-model";
 import { createVideoGenerationTask, waitForVideoGenerationTask, type VideoPreview } from "@/services/api/video";
 import { acceptsInput, channelModelOf, modelContractOf, modelOptionLabel, useConfigStore, useEffectiveConfig, workflowModelOptions, type ModelAccepts, type ModelCapability } from "@/stores/use-config-store";
-import { imageModeFor } from "@/lib/canvas/image-mode";
+import { imageModeFor, imageModeRefusalKey, modelForImageMode, type ImageModeVerb } from "@/lib/canvas/image-mode";
+import { serverVariantLabel } from "@/lib/server-labels";
 import { uploadImage } from "@/services/image-storage";
 import { nanoid } from "nanoid";
 import { type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -300,6 +301,24 @@ function InfiniteCanvasPage() {
     // Opening an editor displaces whatever was open: there is only one slot to put it in.
     const openNodeTool = useCallback((kind: CanvasNodeTool, nodeId: string) => setActiveNodeTool({ kind, nodeId }), []);
     const closeNodeTool = useCallback(() => setActiveNodeTool(null), []);
+
+    // A card's two paint verbs run a graph the card may not own: a picture brought in from outside records no
+    // model at all (#297), and the workflow a card was made with may take no pictures. So the verb chooses the
+    // graph (`modelForImageMode`), and the answer is given at the press — before a mask window opens on a run
+    // that cannot happen, which is what #330 objected to. Nothing here writes to the card: the editors make a
+    // child, and the model they record is the child's.
+    const openImageModeTool = useCallback(
+        (mode: ImageModeVerb, node: CanvasNodeData) => {
+            const wanted = modelForImageMode(effectiveConfig, node.metadata?.model, mode);
+            if (!wanted.ok) {
+                toast.warning(t(imageModeRefusalKey(wanted.reason), { label: serverVariantLabel(mode, mode) }));
+                openPreferences();
+                return;
+            }
+            openNodeTool(mode === "inpaint" ? "maskEdit" : "outpaint", node.id);
+        },
+        [effectiveConfig, openNodeTool, openPreferences, t],
+    );
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -2715,6 +2734,8 @@ function InfiniteCanvasPage() {
                     onCrop={(node) => openNodeTool("crop", node.id)}
                     onSplit={(node) => openNodeTool("split", node.id)}
                     onUpscale={(node) => upscaleImageNode(node)}
+                    onInpaint={(node) => openImageModeTool("inpaint", node)}
+                    onOutpaint={(node) => openImageModeTool("outpaint", node)}
                     onAngle={(node) => openNodeTool("angle", node.id)}
                     onView={handleNodePreview}
                 />
