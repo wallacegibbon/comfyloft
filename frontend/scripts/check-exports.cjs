@@ -53,6 +53,14 @@ const TEST_ONLY = new Map([
     ],
     ["src/lib/wav.ts:WAV_HEADER_BYTES", "the size of the canonical PCM header is part of the format contract the encoder is tested against; no product code needs the number itself, it only writes through it"],
     ["src/lib/canvas/agent-dictation.ts:MIN_SPEECH_SECONDS", "the shortest gesture worth a request is the rule under test — `isSpeakable` is its only product reader, and a test that restated 0.2 would stop noticing when the threshold moved"],
+    [
+        "src/lib/canvas/canvas-card-frame.ts:NODE_CARD_FRAME",
+        "a card's resting thickness. The renderer never names it — it draws `frame.width` — so the only caller that has to know the number is the test that says every quiet state keeps it and only a pick does not (#361)",
+    ],
+    [
+        "src/lib/canvas/canvas-card-frame.ts:NODE_CARD_FRAME_SELECTED",
+        "the other half of that pair: a picked card's thickness is the assertion, and comparing it with `NODE_CARD_FRAME` is the rule of #360 restated — a frame may be loud because it grows outside the card's rect — instead of as 3 and 2",
+    ],
 ]);
 
 function walk(dir, out = []) {

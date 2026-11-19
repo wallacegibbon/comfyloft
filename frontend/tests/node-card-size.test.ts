@@ -1,7 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
 
 import { getNodeSpec } from "../src/constant/canvas";
 import { cardBoxForRun, fitBox, IMAGE_CARD_MAX_SIZE, NODE_MIN_SIZE, nodeShape, nodeSizeForRun } from "../src/lib/canvas/canvas-node-size";
@@ -360,33 +357,5 @@ describe("a step is handed a picture, not a size", () => {
         expect(cardBoxForRun(config, { ...card, ...box }, { model: "image-zit", size: "1024x1024" })).toEqual({});
         // Only the box: the top-left stays where it was, as `resize_node` keeps it (#270).
         expect(box).not.toHaveProperty("position");
-    });
-});
-
-/**
- * Where the frame is drawn, read from the renderer.
- *
- * Every number above is already right, and that is the point: the band the user reported was not in the arithmetic
- * but in the drawing — a border taken out of the card's rect put the canvas between the picture and the frame
- * (#360). So this reads the renderer, the way `overlay-z-index.test.ts` reads the source for the numbers it cannot
- * reach any other way.
- */
-describe("the frame around that box", () => {
-    const source = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/components/canvas/canvas-node.tsx");
-
-    test("the frame is drawn outside the card's rect, which is the picture's rect (#360)", async () => {
-        const raw = await readFile(source, "utf8");
-        // The frame's element, pinned to the rect and pulled out by its own thickness: with `box-sizing: border-box`
-        // that leaves its content box — the area the picture is painted in — exactly the rect. Filling the rect
-        // with the frame instead, as `h-full w-full` did, is what took 4px out of the picture on every side.
-        expect(raw).toMatch(/<div\s+className="absolute overflow-visible"/);
-        expect(raw).toContain("inset: -NODE_CARD_FRAME");
-        expect(raw).toContain("borderWidth: NODE_CARD_FRAME");
-        // One number for the frame and one for the corner, drawn from here rather than from utility classes
-        // (`rounded-3xl border-2` was the old pair, and the renderer had no way to agree with it).
-        expect(raw).not.toContain("rounded-3xl");
-        // Content keeps the frame's inner curve: clipped to the outer one, the canvas shows at four corners too.
-        expect(raw).toContain("const CONTENT_RADIUS = NODE_CARD_RADIUS - NODE_CARD_FRAME;");
-        expect(raw).toContain("borderRadius: CONTENT_RADIUS");
     });
 });

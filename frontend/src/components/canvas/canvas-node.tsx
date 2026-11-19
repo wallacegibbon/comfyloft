@@ -8,7 +8,8 @@ import { formatBytes } from "@/lib/image-utils";
 import { pickImageSource } from "@/lib/image-thumbnail";
 import { previewUrlFor, subscribeImagePreviews, getImagePreviewRevision } from "@/services/image-storage";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
-import { NODE_CARD_FRAME, NODE_CARD_RADIUS, NODE_MIN_SIZE, nodeRatio } from "@/lib/canvas/canvas-node-size";
+import { NODE_MIN_SIZE, nodeRatio } from "@/lib/canvas/canvas-node-size";
+import { cardFrameOf, CONTENT_RADIUS, SELECTION_BLUE, type CardFrameState } from "@/lib/canvas/canvas-card-frame";
 import { LoraNodeContent } from "@/components/canvas/nodes/lora-node";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { CanvasNodeProgressRing } from "./canvas-node-progress-ring";
@@ -17,7 +18,6 @@ import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-refer
 import { useTranslation } from "react-i18next";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
-const selectionBlue = "#2f80ff";
 
 type CanvasNodeProps = {
     data: CanvasNodeData;
@@ -65,15 +65,6 @@ type NodeContentRendererProps = {
     groupChildCount: number;
 };
 
-/**
- * The radius a card's content is clipped to — the frame's own corner, less its thickness.
- *
- * The frame is drawn outside the card's rect (#360) with radius `NODE_CARD_RADIUS`, so the curve its inner edge
- * describes is 2px tighter. Content clipped to the outer radius sits inside that curve and the canvas shows through
- * the four corners: the same off-by-the-frame error, at the corners instead of the sides.
- */
-const CONTENT_RADIUS = NODE_CARD_RADIUS - NODE_CARD_FRAME;
-
 export const CanvasNode = React.memo(function CanvasNode({
     data,
     scale,
@@ -113,8 +104,10 @@ export const CanvasNode = React.memo(function CanvasNode({
     const hasVideoContent = data.type === CanvasNodeType.Video && Boolean(data.metadata?.content);
     const hasAudioContent = data.type === CanvasNodeType.Audio && Boolean(data.metadata?.content);
     const isGroup = data.type === CanvasNodeType.Group;
-    const isActive = isConnectionTarget || isSelected || isFocusRelated;
-    const imageBorderColor = isActive ? selectionBlue : isRelated ? theme.node.muted : "transparent";
+    // What the card's frame says — picked, connected, running, merely nearby — is one rule in
+    // `canvas-card-frame.ts`; this states which card this is and draws exactly what it answers (#361).
+    const state: CardFrameState = { group: isGroup, picture: hasImageContent, selected: isSelected, target: isConnectionTarget, focus: isFocusRelated, related: isRelated, dropTarget: isGroupDropTarget };
+    const frame = cardFrameOf(state, theme);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const resizeRef = useRef({
         isResizing: false,
@@ -270,14 +263,15 @@ export const CanvasNode = React.memo(function CanvasNode({
                     // The frame is drawn *around* the card's rect, not cut out of it. The rect a node record
                     // carries is the picture's rect, and a border taken off it would leave the canvas showing
                     // between the picture and the frame — 4.9px on each side of a 640×186.6 card (#360). The
-                    // border-box is the rect plus this on every side, so its content box is the rect itself.
-                    inset: -NODE_CARD_FRAME,
+                    // border-box is the rect plus the frame on every side, so its content box is the rect itself
+                    // whatever thickness the card's state asks for, which is why a loud frame is free (#361).
+                    inset: -frame.width,
                     background: isGroup || hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
-                    borderWidth: NODE_CARD_FRAME,
-                    borderRadius: NODE_CARD_RADIUS,
-                    borderColor: isGroup ? (isGroupDropTarget || isActive ? selectionBlue : theme.node.stroke) : hasImageContent ? imageBorderColor : isActive ? selectionBlue : isRelated ? theme.node.muted : theme.node.stroke,
-                    borderStyle: isGroup ? "dashed" : "solid",
-                    boxShadow: isGroupDropTarget ? `0 0 0 2px ${selectionBlue}66, inset 0 0 0 999px ${selectionBlue}10` : isActive ? `0 0 0 1px ${selectionBlue}55` : isRelated ? `0 0 0 1px ${theme.node.muted}55, 0 18px 48px rgba(0,0,0,.14)` : undefined,
+                    borderWidth: frame.width,
+                    borderRadius: frame.radius,
+                    borderColor: frame.color,
+                    borderStyle: frame.style,
+                    boxShadow: frame.shadow,
                 }}
                 onMouseDown={(event) => {
                     if (!referenceSelectionState) onMouseDown(event, data.id);
@@ -345,7 +339,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         className="pointer-events-none absolute inset-0 z-[60] grid place-items-center rounded-[inherit]"
                         style={{
                             background: `color-mix(in srgb, ${theme.canvas.background} ${referenceSelectionState === "target" ? 78 : referenceSelectionState === "disabled" ? 60 : 34}%, transparent)`,
-                            boxShadow: referenceSelectionState === "available" ? `inset 0 0 0 2px ${selectionBlue}` : undefined,
+                            boxShadow: referenceSelectionState === "available" ? `inset 0 0 0 2px ${SELECTION_BLUE}` : undefined,
                         }}
                     >
                         {referenceSelectionState !== "disabled" ? (

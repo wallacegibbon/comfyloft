@@ -12382,8 +12382,8 @@ there is one place that says what the ask's shape is.
 it and nothing adds one back: a fit, a corner drag, `resize_node` and the picture all use that one rectangle, and
 the frame a card is drawn with — its thickness (`NODE_CARD_FRAME`) and its corner (`NODE_CARD_RADIUS`) — is
 positioned *outside* it (`inset: -NODE_CARD_FRAME`), with the border drawn from those two numbers rather than from
-utility classes. Content is clipped to `NODE_CARD_RADIUS - NODE_CARD_FRAME`, the inside edge of that curve.
-#359's rule stands exactly as written; what was wrong was that the frame was cut out of the box.
+utility classes. Content is clipped to `CONTENT_RADIUS`, the frame's inner curve (#361). #359's rule stands exactly
+as written; what was wrong was that the frame was cut out of the box.
 
 **Why** "蓝色的边框跟里面的图片…两边还有间隙" — and it was there, 4.9px on each side. A card 640×186.6 holding the
 487×142 picture it had been made for: equal ratios on the box (3.4296 both), unequal inside it, because
@@ -12413,13 +12413,66 @@ pointer purposes. The corner is still two numbers that have to agree (`NODE_CARD
 **Tested** `frontend/tests/node-card-size.test.ts`: the reported numbers are a case of their own —
 `fitBox(487×142, IMAGE_CARD_MAX_SIZE)` is asked for its `bandsOf`, the band a picture is left with, and both axes
 must be zero (so must the same question asked of a card the fit settled on the floor, and of a square, which never
-had the problem) — and `describe("the frame around that box")` reads the renderer for the half no arithmetic can
-reach: the frame element pinned with `inset: -NODE_CARD_FRAME`, the border drawn from `NODE_CARD_FRAME`, no
-`rounded-3xl` left in the file, and content clipped to `NODE_CARD_RADIUS - NODE_CARD_FRAME`. 58 files / 697 tests,
-the typecheck, and the i18n/exports/decisions/comment/prettier gates. The drawing was watched at the reported
-numbers: a card whose record says 640×186.6 over a 487×142 picture paints all of it, band 0 on both axes, with the
-blue frame's box at 644×190.6 around it.
+had the problem). The half no arithmetic can reach is held by the frame's own tests, which read the renderer for
+the frame pinned with `inset: -frame.width` and assert that every frame's corner is `CONTENT_RADIUS` plus its own
+thickness — the inner edge never moves (#361). The drawing was watched at the reported numbers: a card whose record
+says 640×186.6 over a 487×142 picture paints all of it, band 0 on both axes, with the blue frame's box at
+644×190.6 around it, and a 3px frame over the same card still leaves band 0.
 
-**Where** `frontend/src/lib/canvas/canvas-node-size.ts` (`NODE_CARD_FRAME`, `NODE_CARD_RADIUS`, and `fitBox`
-knowing neither), `frontend/src/components/canvas/canvas-node.tsx` (the frame drawn outside the rect;
-`CONTENT_RADIUS`).
+**Where** `frontend/src/lib/canvas/canvas-node-size.ts` (a fit that knows nothing about frames),
+`frontend/src/lib/canvas/canvas-card-frame.ts` (`NODE_CARD_FRAME`, `NODE_CARD_RADIUS`, `CONTENT_RADIUS`),
+`frontend/src/components/canvas/canvas-node.tsx` (the frame drawn outside the rect).
+
+## 361. A card's frame is one rule per state, and it is allowed to be loud
+
+**Decision** How a card is framed is answered once, in `canvas-card-frame.ts`, from the state the card is in —
+thickness, colour, line, corner, ring — and the renderer draws what it is told. The states, in the order a user
+reads them: a group being dropped into (2px blue dashed, a wash); **a card the user picked** (3px solid
+`SELECTION_BLUE`, a 2px ring at 35% and a 22px glow — `NODE_CARD_FRAME_SELECTED`); a wire the user is dragging,
+about to land (the same loud blue, **dashed**, because it is a choice not made yet); the card a run or the agent is
+working on (2px `SELECTION_BLUE`, a faint ring); the cards merely around a selection (2px palette grey); and at
+rest, the card's own edge — for a card whose content is a picture, no edge at all, because the picture's rectangle
+is the card. Every frame is drawn with a corner of `CONTENT_RADIUS + its thickness`, so it grows outwards only.
+
+**Why** "这个边框太不明显了…变亮一点或者变粗一点…现在选中了，有时候都看不清楚是选中了还是没选中."
+`isSelected`, `isFocusRelated`, `isRelated` and `isConnectionTarget` were folded into one `isActive` and one 2px
+line, so the four answers came out the same shape: a card holding a picture has no edge at rest, picking it added a
+2px hairline — over a white picture it is invisible — and "around the selection" was the same thickness as "the one
+I picked", differing only in hue. Nothing else on the canvas says which card is meant: the toolbar appears under
+whichever card the pointer is on, so the frame is the only durable signal there is.
+
+**What this makes free** #360 is precisely what lets a frame be loud. A thicker frame used to take a pixel off the
+picture on every side and re-clip its corners; now it costs the picture nothing, and since every state's corner is
+the same inner curve, picking a card changes no pixel inside it. That is why the answer to "make it clearer" is a
+number in one file instead of a redesign of the card.
+
+**Rejected** Countering zoom (`borderWidth: 3/scale`) so a frame keeps a constant width on screen: it survives
+zooming out, and it fights how the canvas scales everything else — a card at 30% would carry a frame thicker than
+the wires leaving it — and the report was written at 130%, where a 2px line is a hairline for reasons zoom does not
+touch. Giving every card a resting edge: an outline around a photograph reads as a frame inside a frame, and the
+state the user asked to see is the selected one, which gets it. A second accent colour for the agent's card: the
+blue already means "this one", and a second colour with a second meaning is how a canvas ends up needing a legend.
+
+**Cost** A picked card is a pixel larger on every side than the same card at rest — outwards, so nothing inside it
+moves — and its glow shares the rectangle that a run's progress ring rides, which is accepted: the ring is the
+run's light and the frame is the user's claim on the card. The glow was watched on both palettes; on the paper
+canvas it reads as a shadow rather than a halo, which is the same weight in a lighter room.
+
+**Tested** `frontend/tests/node-card-frame.test.ts` (new): no two states draw the same frame — thickness, colour,
+line and ring compared as one string across all six; only a pick and a wire's target are thick, the rest keep the
+resting thickness; a picked frame is blue in both palettes and carries a ring *and* a glow, while a run's own card
+is blue at the resting thickness and context stays palette grey; a picture at rest has a transparent frame and a
+card of words keeps `theme.node.stroke`; a group stays dashed, and a broken line means a group or an unfinished
+wire; and for every state in both palettes `radius - width` is exactly `CONTENT_RADIUS` — the invariant #360 needs
+from a frame that changes thickness. The renderer is read for the rest: the frame pinned with `inset: -frame.width`,
+drawn from `frame.*` with nothing of its own added, `rounded-3xl` still gone, content clipped to `CONTENT_RADIUS`.
+59 files / 703 tests, the typecheck, the i18n/exports/decisions/comment/prettier gates, `make check`, the build.
+Watched on the canvas from the report at the user's own zoom: the picked card's computed frame is 3px blue with the
+ring and glow and its corner at 25px (inner 22), a row across its edge reads canvas → glow → blue 3px → white with
+the picture still filling the rect (band 0 at every thickness), the card around it is 2px grey, and a card at rest
+has no edge at all. The same drawing was then watched on the light palette (the driven page was switched to it): the
+picked card's frame is that palette's own grey-free blue, and it carries the same weight on paper.
+
+**Where** `frontend/src/lib/canvas/canvas-card-frame.ts` (the one rule, and `SELECTION_BLUE` out of the renderer),
+`frontend/src/components/canvas/canvas-node.tsx` (it asks; the four booleans it already had are no longer folded
+into one `isActive`).

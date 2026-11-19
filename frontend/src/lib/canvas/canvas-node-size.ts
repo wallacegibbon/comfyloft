@@ -41,29 +41,10 @@ export function nodeRatio(node: Pick<CanvasNodeData, "width" | "height" | "metad
 }
 
 /**
- * The frame a card is drawn with — its border's thickness, drawn *outside* the box the node record carries.
- *
- * A card's box is the picture's rect, and that is the one rectangle every reader of a card agrees on: the fit,
- * the drag, the agent's `resize_node`, the picture. The frame is drawn around it, not cut out of it, so nothing
- * has to know it exists — which is the whole reason there is no arithmetic about it anywhere. `canvas-node.tsx`
- * draws the border from this number rather than from a utility class because it is the only place the number is
- * written. A frame cut out of the box instead is what #360 is about: a 640×186.6 card holding a 487×142 picture
- * painted 636×182.6, so the picture stopped short of the border by 4.9px on each side, and because a card that
- * holds a picture has no fill of its own the canvas showed through it — a black line inside the blue border, on a
- * card whose two ratios were reported as identical. Squares hide it (a square minus a border is still a square),
- * which is why the square graphs never showed the seam.
- */
-export const NODE_CARD_FRAME = 2;
-
-/**
- * A card's corner radius: the frame's outer curve.
- *
- * Content is clipped to `NODE_CARD_RADIUS - NODE_CARD_FRAME`, which is that curve's inner edge (#360).
- */
-export const NODE_CARD_RADIUS = 24;
-
-/**
  * The box that holds a shape inside a box: the shape itself, inside the limits, never under the floor.
+ *
+ * Nothing in this file knows a card has a frame: a frame is drawn outside the box (#360), so a shape needs no
+ * room made in it for one, and `canvas-card-frame.ts` is where the frame's own numbers live.
  *
  * This is the only code in the canvas that turns a shape into a size, and every writer of a card's box goes
  * through it — a run's ask, a pasted picture, a crop, a frame out of a film. The floor matters more than it looks:
