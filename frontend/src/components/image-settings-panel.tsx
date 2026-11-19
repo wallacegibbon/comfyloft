@@ -5,7 +5,7 @@ import { Switch } from "@/components/kit/choice";
 import i18n from "@/i18n";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { imageModeFor } from "@/lib/canvas/image-mode";
-import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaRatioOptions, mediaScaleOptions, readMediaDimensions } from "@/lib/media-size";
+import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaRatioOptions, mediaScaleOptions, readMediaDimensions, sizeForTier } from "@/lib/media-size";
 import { acceptsInput, type AiConfig } from "@/stores/use-config-store";
 
 const DIMENSION_STEP = 16;
@@ -47,7 +47,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const selectedRatio = inferMediaRatio(activeSize);
     const dimensions = readMediaDimensions(activeSize, selectedScale, selectedRatio);
     const applySize = (scale: string, ratio: string) => onConfigChange("size", computeMediaSize(scale, ratio));
-    const selectScale = (scale: string) => applySize(scale, selectedRatio === "auto" ? "1:1" : selectedRatio);
+    const selectScale = (scale: string) => onConfigChange("size", sizeForTier(scale, activeSize));
     const selectRatio = (ratio: string) => applySize(selectedScale, ratio);
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
@@ -90,10 +90,13 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         </div>
                         <div className="space-y-2.5">
                             <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.resolution")}</SettingTitle>
-                            <div className="grid grid-cols-4 gap-2.5">
+                            <div className="grid grid-cols-3 gap-2.5">
+                                {/* A tier is how big a picture is; the way to say "the model decides" is the `auto`
+                                    aspect below, which states no size at all. An `auto` tier was how a bare ratio
+                                    used to be written, and two readers read it differently (#359). */}
                                 {mediaScaleOptions.map((value) => (
                                     <OptionPill key={value} selected={selectedScale === value} theme={theme} onClick={() => selectScale(value)}>
-                                        {value === "auto" ? t("settingsPanels.common.auto") : value}
+                                        {value}
                                     </OptionPill>
                                 ))}
                             </div>

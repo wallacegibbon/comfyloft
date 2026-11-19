@@ -25,6 +25,7 @@ vi.mock("@/lib/image-utils", () => ({
 }));
 
 const { requestEdit, requestGeneration } = await import("@/services/api/image");
+const { planRunShape } = await import("@/lib/canvas/run-shape");
 
 // A run belongs to a canvas (#156): these cases post into one.
 const { setActiveCanvas } = await import("@/services/canvas-files");
@@ -321,5 +322,77 @@ describe("a stale knob", () => {
 
         const body = runBody(calls);
         expect(body.inputs).toEqual({ prompt: "a brass compass", seed: 7 });
+    });
+});
+
+/**
+ * What a run is told about shape, from the answer the graph published for it.
+ *
+ * The card and the request used to compute this separately, and they came apart: a stored `2:1` drew a 1536x864
+ * card while the run asked for 2048x1024, and `auto` drew a square card while the graph drew its own portrait.
+ * Both readers now go through `planRunShape`, so these cases pin the request half against the card half
+ * (`node-card-size.test.ts` pins the other) — #359.
+ */
+const withShapeAnswer = (name: string, output: Record<string, string>, inputs: string[]) =>
+    ({
+        ...server(),
+        channels: [{ id: "local", name: "local", baseUrl: "http://127.0.0.1:8190/v1", models: [{ name, capability: "image", workflowId: name, hasPrompt: true, inputs, output }] }],
+        model: `local::${name}`,
+        imageModel: `local::${name}`,
+    }) as unknown as Config;
+
+describe("what a run is told about shape", () => {
+    it("states the size a graph sized by the ask was asked for, and the card is drawn at that same shape", async () => {
+        const { calls } = stubServer();
+        const config = { ...withShapeAnswer("image-zit", { sizedBy: "ask", pixels: "832x1216" }, ["prompt", "size"]), size: "1536x864" };
+
+        await requestGeneration(config, "a lighthouse at dawn");
+
+        expect(runBody(calls).inputs.size).toBe("1536x864");
+        // The agreement the bug was: the shape the request states and the shape the card frames are one number.
+        const card = planRunShape(config, "image", { model: "image-zit", size: "1536x864" });
+        expect(card.size).toBe("1536x864");
+        expect(card.shape!.width / card.shape!.height).toBeCloseTo(1536 / 864, 4);
+    });
+
+    it("sends no size for a graph that draws its own, and reads the shape off its knob", async () => {
+        const { calls } = stubServer();
+        const config = { ...withShapeAnswer("image-qwen", { sizedBy: "squareOf", key: "resolution", pixels: "1024x1024" }, ["prompt", "resolution"]), params: { resolution: 1536 } };
+
+        await requestGeneration(config, "a brass compass");
+
+        expect(runBody(calls).inputs.size).toBeUndefined();
+        // The card still knows the shape: the square the knob says, not the size the canvas happens to hold.
+        expect(planRunShape(config, "image", { model: "image-qwen", size: "1024x1024", params: { resolution: 1536 } }).shape).toEqual({ width: 1536, height: 1536 });
+    });
+
+    it("sends no size for a graph that keeps the picture it was handed", async () => {
+        const { calls } = stubServer();
+        const config = { ...withShapeAnswer("image-keep", { sizedBy: "source" }, ["prompt"]), size: "1536x864" };
+
+        await requestGeneration(config, "repaint the window");
+
+        expect(runBody(calls).inputs.size).toBeUndefined();
+    });
+
+    it("sends no size for `auto`, so the graph draws what it was built to draw", async () => {
+        const { calls } = stubServer();
+        const config = { ...withShapeAnswer("image-zit", { sizedBy: "ask", pixels: "832x1216" }, ["prompt", "size"]), size: "auto" };
+
+        await requestGeneration(config, "a lighthouse at dawn");
+
+        expect(runBody(calls).inputs.size).toBeUndefined();
+        // and the card is the graph's own shape rather than a square invented next to it
+        expect(planRunShape(config, "image", { model: "image-zit", size: "auto" }).shape).toEqual({ width: 832, height: 1216 });
+    });
+
+    it("refuses a size a run would not take, in the words of the rule it broke", async () => {
+        stubServer();
+        const config = { ...withShapeAnswer("image-zit", { sizedBy: "ask", pixels: "832x1216" }, ["prompt", "size"]), size: "2:1" };
+
+        await expect(requestGeneration(config, "a lighthouse at dawn")).rejects.toThrow("apiErrors.invalidImageSizeFormat");
+
+        const lopsided = { ...config, size: "1600x480" };
+        await expect(requestGeneration(lopsided, "a lighthouse at dawn")).rejects.toThrow("apiErrors.imageRatioLimit");
     });
 });

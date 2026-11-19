@@ -154,7 +154,7 @@ func imageFixture() (string, map[string]any, map[string]any) {
 	graph := map[string]any{
 		"4": map[string]any{"class_type": "CLIPTextEncode", "inputs": map[string]any{"text": "placeholder"}},
 		"7": map[string]any{"class_type": "EmptyLatentImage", "inputs": map[string]any{"width": 1024.0, "height": 1024.0}},
-		"8": map[string]any{"class_type": "KSampler", "inputs": map[string]any{"seed": 1.0, "steps": 4.0, "cfg": 1.0}},
+		"8": map[string]any{"class_type": "KSampler", "inputs": map[string]any{"seed": 1.0, "steps": 4.0, "cfg": 1.0, "latent_image": []any{"7", 0}}},
 		"9": map[string]any{"class_type": "SaveImage", "inputs": map[string]any{
 			"images": []any{"8", 0}, "filename_prefix": "out",
 		}},
@@ -386,6 +386,33 @@ func TestWorkflowsReportTheirModelIds(t *testing.T) {
 	}
 	if inputs, ok := model["imageInputs"].(float64); !ok || inputs != 0 {
 		t.Errorf("imageInputs = %v, want 0 for a text-to-image workflow", model["imageInputs"])
+	}
+}
+
+// The shape a graph draws is decided by a card before the run answers, so the answer cannot live on the
+// server alone: the catalog row has to carry it. The fixture's graph bakes a 1024×1024 latent that the
+// request's `size` writes, which is the reading `internal/workflow` derives — this test is about the wire
+// field the canvas reads, not about the derivation itself (#359).
+func TestWorkflowsPublishWhatSizesTheirOutput(t *testing.T) {
+	fake := newFakeComfy(t)
+	server := httptest.NewServer(newTestServer(t, fake).Handler())
+	defer server.Close()
+
+	_, payload := doJSON(t, server.Client(), http.MethodGet, server.URL+"/api/workflows", nil)
+	rows, _ := payload["workflows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("workflows = %v", rows)
+	}
+	row, _ := rows[0].(map[string]any)
+	output, ok := row["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want the answer the graph's wiring gives", row["output"])
+	}
+	if output["sizedBy"] != "ask" {
+		t.Errorf("sizedBy = %v, want ask: the fixture binds size.width and size.height into its latent", output["sizedBy"])
+	}
+	if output["pixels"] != "1024x1024" {
+		t.Errorf("pixels = %v, want the latent the fixture bakes", output["pixels"])
 	}
 }
 

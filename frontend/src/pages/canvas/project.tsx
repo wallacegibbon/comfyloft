@@ -22,7 +22,7 @@ import { uploadImage } from "@/services/image-storage";
 import { nanoid } from "nanoid";
 import { type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { useCanvasTheme } from "@/lib/canvas/use-canvas-theme";
-import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
+import { fitBox } from "@/lib/canvas/canvas-node-size";
 import { VIDEO_NODE_MAX_HEIGHT, VIDEO_NODE_MAX_WIDTH, applyGeneratedVideo } from "@/lib/canvas/canvas-generated-video";
 import { NODE_STATUS_ERROR, NODE_STATUS_IDLE, NODE_STATUS_LOADING, NODE_STATUS_SUCCESS } from "@/lib/canvas/canvas-node-status";
 import { useContentIngress } from "@/pages/canvas/hooks/use-content-ingress";
@@ -68,7 +68,7 @@ import { useCanvasAgentTools } from "@/pages/canvas/hooks/use-canvas-agent-tools
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { exportCanvas } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
-import { recallNodeSettings } from "@/lib/canvas/node-settings-memory";
+
 import {
     applyGroupSelection,
     applyUngroupSelection,
@@ -905,7 +905,7 @@ function InfiniteCanvasPage() {
 
     const createConnectedNode = useCallback(
         (type: string, pending: PendingConnectionCreate) => {
-            const newNode = createCanvasNode(type, pending.position, recallNodeSettings(type) || undefined, { size: effectiveConfig.size, vquality: effectiveConfig.vquality });
+            const newNode = createCanvasNode(effectiveConfig, type, pending.position);
             const insertBefore = Boolean(getNodeDefinition(type)?.insertBefore);
             // A node inserted upstream (a LoRA card, say) is created before the current node; the current node must not be treated as its upstream.
             const connection = insertBefore ? normalizeConnection(newNode.id, pending.connection.nodeId, [...nodesRef.current, newNode]) : normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode]);
@@ -1095,9 +1095,9 @@ function InfiniteCanvasPage() {
     const createNode = useCallback(
         (type: CanvasNodeTypeId, position?: Position, patch?: CanvasNodeMetadata): CanvasNodeData => {
             const targetPosition = position || getCanvasCenter();
-            // The card is drawn at the shape its next run is asked for — its own settings first, the canvas's
-            // otherwise — so filling it in changes only what is inside (#354).
-            const newNode = createCanvasNode(type, targetPosition, patch, { size: effectiveConfig.size, vquality: effectiveConfig.vquality });
+            // The card is drawn at the shape its next run will draw — its own settings first, the canvas's
+            // otherwise, and the graph's answer both times rather than a shape guessed here (#354).
+            const newNode = createCanvasNode(effectiveConfig, type, targetPosition, patch);
 
             setNodes((prev) => [...prev, newNode]);
             setSelectedNodeIds(new Set([newNode.id]));
@@ -1224,7 +1224,7 @@ function InfiniteCanvasPage() {
         const members = collectGroupMemberNodes(ids, nodesRef.current);
         if (members.length < 2) return null;
         const rect = getGroupWrapRect(members);
-        const created = createCanvasNode(CanvasNodeType.Group, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+        const created = createCanvasNode(effectiveConfig, CanvasNodeType.Group, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
         const result = applyGroupSelection(ids, nodesRef.current, connectionsRef.current, { ...created, position: { x: rect.x, y: rect.y }, width: rect.width, height: rect.height });
         if (!result) return null;
         setNodes(result.nodes);
@@ -1949,15 +1949,18 @@ function InfiniteCanvasPage() {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, content } } : node)));
     }, []);
 
-    const handleConfigNodeChange = useCallback((nodeId: string, patch: Partial<CanvasNodeData["metadata"]> = {}) => {
-        setNodes((prev) =>
-            prev.map((node) => {
-                if (node.id !== nodeId) return node;
-                const clearError = node.metadata?.status === NODE_STATUS_ERROR && patch.status === undefined ? { status: NODE_STATUS_IDLE, errorDetails: undefined } : {};
-                return applyNodeConfigPatch(node, { ...patch, ...clearError });
-            }),
-        );
-    }, []);
+    const handleConfigNodeChange = useCallback(
+        (nodeId: string, patch: Partial<CanvasNodeData["metadata"]> = {}) => {
+            setNodes((prev) =>
+                prev.map((node) => {
+                    if (node.id !== nodeId) return node;
+                    const clearError = node.metadata?.status === NODE_STATUS_ERROR && patch.status === undefined ? { status: NODE_STATUS_IDLE, errorDetails: undefined } : {};
+                    return applyNodeConfigPatch(effectiveConfig, node, { ...patch, ...clearError });
+                }),
+            );
+        },
+        [effectiveConfig],
+    );
 
     const downloadNodeImage = useCallback((node: CanvasNodeData) => {
         if ((node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
@@ -1993,7 +1996,7 @@ function InfiniteCanvasPage() {
         try {
             for (const position of positions) {
                 const image = await uploadImage(await captureVideoFrame(source, position, video?.currentTime || 0));
-                const size = fitNodeSize(image.width, image.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                const size = fitBox({ width: image.width, height: image.height }, { width: VIDEO_NODE_MAX_WIDTH, height: VIDEO_NODE_MAX_HEIGHT });
                 const id = nanoid();
                 const x = node.position.x + node.width + 96;
                 let y = node.position.y + node.height / 2 - size.height / 2;
@@ -2056,7 +2059,7 @@ function InfiniteCanvasPage() {
                 const last = clips[clips.length - 1]!;
                 const width = joined.file.width || last.width;
                 const height = joined.file.height || last.height;
-                const size = fitNodeSize(width, height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                const size = fitBox({ width, height }, { width: VIDEO_NODE_MAX_WIDTH, height: VIDEO_NODE_MAX_HEIGHT });
                 const id = nanoid();
                 const x = last.position.x + last.width + 96;
                 let y = last.position.y + last.height / 2 - size.height / 2;
@@ -2499,7 +2502,7 @@ function InfiniteCanvasPage() {
     // Written during render on purpose: the overlay stays mounted while it fades out, so the last preview has to be
     // retained after the hovered node clears. Sizing reuses the measured container size instead of reading layout here.
     if (hoverPreviewMedia) {
-        const previewSize = fitNodeSize(hoverPreviewMedia.width, hoverPreviewMedia.height, size.width * 0.9, size.height * 0.9);
+        const previewSize = fitBox({ width: hoverPreviewMedia.width, height: hoverPreviewMedia.height }, { width: size.width * 0.9, height: size.height * 0.9 }, { width: 1, height: 1 });
         retainedPreviewRef.current = { video: hoverPreviewMedia.video, src: hoverPreviewMedia.src, width: previewSize.width, height: previewSize.height };
     }
     const retainedPreview = retainedPreviewRef.current;

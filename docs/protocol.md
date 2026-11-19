@@ -218,6 +218,13 @@ A workflow with modes publishes one list per mode (`variantContracts`), read off
 than off its parent: a mode is a different graph, so the list a request names is the list it is validated against
 (decisions #303).
 
+Every image and video workflow also publishes `output`: what decides the shape of what that graph draws, derived
+by walking the graph itself rather than declared anywhere. `sizedBy` is `"ask"` (the request states it — a size
+binding, an output canvas, or a pair of parameters writing a node's width and height), `"squareOf"` (one knob
+sizes the latent on its own; `key` names it) or `"source"` (the picture handed in decides); `pixels` is what the
+graph draws when the request states nothing. A workflow whose graph cannot be read publishes no `output` at all,
+which is a third state and not a failure — a client that gets nothing invents no shape (decisions #359).
+
 Rules worth knowing:
 
 - **Unknown keys are rejected**, with the accepted list in the message. A typo (`setps`) used to be
@@ -236,8 +243,9 @@ Rules worth knowing:
   reads, nothing more — and that the workflow reads the key at all; the ceiling a canvas applies (3840 px on the
   longest side, at most 3:1, 655360–8294400 pixels in total, both sides aligned to 16) is that client's policy,
   not this protocol's. So a caller that is not the canvas may ask for more, and what happens then is the graph's
-  and the encoder's business rather than a number this server invented (decisions #306: the limits live in
-  `frontend/src/services/api/image.ts`, where the control that promises them is).
+  and the encoder's business rather than a number this server invented (decisions #306: the limits live with the
+  control that promises them, in `frontend/src/lib/media-size.ts`, which is also where a card's box is fitted and
+  where a run's size is planned — one set of numbers, three readers).
 - **A workflow may be a step, not a model.** `video-rife` has no prompt: it takes a clip and a
   multiplier. The server does not care — it runs any registered workflow — but it also does not
   pretend such a step is a model a client picks from a list.

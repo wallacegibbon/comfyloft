@@ -20,7 +20,6 @@ const INHERITABLE_FIELDS = new Set([
     "audioInstructions",
     "seed",
     "seedFixed",
-    "aspectRatio",
     "params",
 ]);
 

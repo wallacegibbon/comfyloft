@@ -142,7 +142,6 @@ export type CanvasNodeMetadata = {
     stepProgress?: { step: number; total: number; complete?: boolean };
     seed?: string;
     seedFixed?: string;
-    aspectRatio?: string;
     groupId?: string;
     params?: Record<string, unknown>; // Per-node model params (e.g. LoRA stack).
 };

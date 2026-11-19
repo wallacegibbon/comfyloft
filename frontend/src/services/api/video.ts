@@ -1,7 +1,9 @@
 import i18n from "@/i18n";
 import { apiErrorMessage, isCancelled, throwIfCanceled } from "@/services/api/http";
 import { dataUrlToFile } from "@/lib/image-utils";
-import { clampVideoSeconds, computeVideoSize, inferVideoRatio } from "@/lib/media-size";
+import { clampVideoSeconds } from "@/lib/media-size";
+import { planRunShape } from "@/lib/canvas/run-shape";
+import { CanvasNodeType } from "@/types/canvas";
 import { mediaIdOf } from "@/services/canvas-files";
 import { getMediaBlob, resolveMediaUrl, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -106,7 +108,10 @@ async function createServerVideoTask(config: AiConfig, prompt: string, reference
     const inputs: Record<string, unknown> = { prompt, mode: plan.mode };
     const seconds = normalizeVideoSeconds(config.videoSeconds);
     if (Number(seconds) > 0) inputs.seconds = Number(seconds);
-    const size = normalizeVideoSize(config.size, config.vquality);
+    // The shape is the graph's answer, not a tier's default: a film's pixels are derived from the tier it is made
+    // at — which is the same plan the card was drawn at — and a workflow that keeps the clip it was handed, an
+    // interpolation, is not told a size at all (#359).
+    const size = planRunShape(config, CanvasNodeType.Video, { size: config.size, vquality: config.vquality, model: config.model, imageMode: plan.mode, params: config.params }).size;
     if (size) inputs.size = size;
     if (plan.mode === "frames") inputs.frameMode = plan.frameMode;
     // The SelfLift choice is a knob like any other — the workflow has to declare `transition_step` for it to
@@ -253,12 +258,4 @@ function normalizeVideoSeconds(value: string) {
 function resolveVideoMode(mode: string | undefined, imageCount: number) {
     if (mode === "text" || mode === "reference" || mode === "frames") return mode;
     return imageCount > 2 ? "reference" : "frames";
-}
-
-function normalizeVideoSize(value: string, resolution?: string) {
-    const selectedResolution = resolution || "720";
-    if (!value || value === "auto") return computeVideoSize(selectedResolution, "16:9");
-    // A stale pixel size must not override the selected 480/720/1080 tier.
-    const ratio = inferVideoRatio(value);
-    return computeVideoSize(selectedResolution, ratio === "auto" ? "16:9" : ratio);
 }

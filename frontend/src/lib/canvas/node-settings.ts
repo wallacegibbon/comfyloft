@@ -1,7 +1,6 @@
 import { audioFormatOptions } from "@/lib/audio-generation";
 import type { ModelAccepts } from "@/stores/use-config-store";
-import { computeVideoSize, inferVideoRatio, parseVideoResolution, VIDEO_SECONDS_MAX, VIDEO_SECONDS_MIN, videoRatioOptions } from "@/lib/media-size";
-import { planImageSize } from "@/services/api/image";
+import { computeVideoSize, inferVideoRatio, parseVideoResolution, planStatedSize, VIDEO_SECONDS_MAX, VIDEO_SECONDS_MIN, videoRatioOptions } from "@/lib/media-size";
 import { CanvasNodeType, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
 
 /**
@@ -15,7 +14,7 @@ import { CanvasNodeType, type CanvasNodeData, type CanvasNodeMetadata } from "@/
  *
  * This is not a second vocabulary. Every setting is the *request's* key (`size`, `seconds`, `background`,
  * `seed`, `format`, `lyrics`, and the knobs a workflow declares), the value is checked by the functions the
- * panel and the request already use (`planImageSize`, the length bounds, the container list), and whether a
+ * panel and the request already use (`planStatedSize`, the length bounds, the container list), and whether a
  * key means anything at all is asked of the published contract — the three-state answer #304 gave the panel's
  * rows. A setting the run would drop is refused here, with the list of what it does read, rather than written
  * into a node and silently ignored.
@@ -98,7 +97,7 @@ const text = (value: unknown) => (typeof value === "string" ? { value } : { reas
 /** A size in pixels, aligned the way the request aligns it, or the reason a run could not take it. */
 const size: Field["read"] = (value) => {
     if (typeof value !== "string") return { reason: "needs a string like 1360x768, or auto" };
-    const planned = planImageSize(value);
+    const planned = planStatedSize(value);
     if (planned.kind === "pixels") return { value: planned.size };
     if (planned.kind === "auto") return { value: "auto" };
     if (planned.kind === "ratio") return { reason: `${planned.ratio} is a shape, not a size: state the pixels, like 1360x768 for a 16:9 picture` };
@@ -134,8 +133,8 @@ const seed: Field["read"] = (value) => {
 };
 
 /**
- * A film's size, which is not the number a run is given: `normalizeVideoSize` derives the pixels from the
- * quality tier and the shape, so pixels are a *shape* here and the tier is what says how big it is.
+ * A film's size, which is not the number a run is given: the pixels are derived from the quality tier and the
+ * shape at submit (`planRunShape`), so pixels are a *shape* here and the tier is what says how big it is.
  *
  * A stated size that disagrees with what the tier would make is refused, with the number the tier does make —
  * the same refusal-not-clamp rule as a contradictory resize (#270), and the reason `quality` exists as a
@@ -228,7 +227,8 @@ function fieldsFor(kind: string, contract: SettingsContract): Field[] {
  * The contract's three-state answer to "may a run of this model carry this key" (#304): only `false` refuses.
  *
  * A field with no request key is the client's own input rather than the request's — a film's quality tier is
- * only ever read by `normalizeVideoSize` — so no list can refuse it, and it is checked by its own bounds.
+ * only ever read through the size a run derives from it — so no list can refuse it, and it is checked by its own
+ * bounds.
  */
 function refusedBy(key: string, contract: SettingsContract) {
     if (!key) return false;

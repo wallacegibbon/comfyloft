@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { nanoid } from "nanoid";
 
 import { useEffectiveConfig } from "@/stores/use-config-store";
-import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
+import { fitBox, nodeShape } from "@/lib/canvas/canvas-node-size";
+import { planRunShape, runAskOf } from "@/lib/canvas/run-shape";
 import { VIDEO_INTERPOLATE_WORKFLOW } from "@/lib/canvas/tool-workflows";
 import { VIDEO_NODE_MAX_HEIGHT, VIDEO_NODE_MAX_WIDTH } from "@/lib/canvas/canvas-generated-video";
 import { NODE_STATUS_IDLE } from "@/lib/canvas/canvas-node-status";
@@ -31,9 +32,15 @@ export function useVideoEditors(deps: NodeEditorDeps) {
         (node: CanvasNodeData) => {
             if (!node.metadata?.content) return;
             const childId = nanoid();
-            const sourceWidth = node.metadata?.naturalWidth || node.width;
-            const sourceHeight = node.metadata?.naturalHeight || node.height;
-            const size = fitNodeSize(sourceWidth, sourceHeight, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+            // The workflow, not the canvas's model — named from the moment the node exists, so its panel is its own
+            // rather than whatever the canvas falls back to (#263). No params: the multiplier is the workflow's
+            // declared default until someone picks another, and no prompt, because an interpolation is asked nothing.
+            const step = buildStepNodeMetadata(effectiveConfig, VIDEO_INTERPOLATE_WORKFLOW);
+            // The card is drawn at the shape this run will draw, and the graph answers that: an interpolation is
+            // handed a clip and keeps its shape, so the card is the clip's shape — never a tier's default, and never
+            // the source *card's* box, which a drag may have changed (#359).
+            const shape = planRunShape(effectiveConfig, CanvasNodeType.Video, { ...runAskOf(node.metadata, effectiveConfig), model: step.model }, nodeShape(node)).shape || nodeShape(node);
+            const size = fitBox(shape, { width: VIDEO_NODE_MAX_WIDTH, height: VIDEO_NODE_MAX_HEIGHT });
             setNodes((prev) => [
                 ...prev,
                 {
@@ -44,11 +51,7 @@ export function useVideoEditors(deps: NodeEditorDeps) {
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
                     width: size.width,
                     height: size.height,
-                    // The workflow, not the canvas's model — named from the moment the node exists, so its panel
-                    // is its own rather than whatever the canvas falls back to (#263). No params: the multiplier
-                    // is the workflow's declared default until someone picks another, and no prompt, because an
-                    // interpolation is asked nothing.
-                    metadata: { ...buildStepNodeMetadata(effectiveConfig, VIDEO_INTERPOLATE_WORKFLOW), status: NODE_STATUS_IDLE },
+                    metadata: { ...step, status: NODE_STATUS_IDLE },
                 },
             ]);
             setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);

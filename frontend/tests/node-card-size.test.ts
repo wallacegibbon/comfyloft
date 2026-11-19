@@ -1,22 +1,54 @@
 import { describe, expect, test } from "vitest";
 
 import { getNodeSpec } from "../src/constant/canvas";
-import { cardBoxForRun, NODE_MIN_SIZE, nodeSizeForRun } from "../src/lib/canvas/canvas-node-size";
+import { cardBoxForRun, fitBox, NODE_MIN_SIZE, nodeShape, nodeSizeForRun } from "../src/lib/canvas/canvas-node-size";
 import { applyGeneratedImage, applyNodeConfigPatch, createCanvasNode } from "../src/lib/canvas/canvas-node-factory";
 import { applyGeneratedVideo } from "../src/lib/canvas/canvas-generated-video";
+import { planRunShape, type MediaShape } from "../src/lib/canvas/run-shape";
 import { CanvasNodeType, type CanvasNodeData } from "../src/types/canvas";
+import type { AiConfig, ChannelModel } from "../src/stores/use-config-store";
 
 /**
- * A card's box is the shape of the ask, never the shape of the answer.
+ * A card's box is the shape the run will draw, never the shape of the answer that lands in it.
  *
- * The bug this is the counter to: an empty image card was the type table's 340×240, and when the picture
- * landed the card was resized around it — so the same card the user had been looking at was a different
- * size the moment it had something in it, and a portrait run made a smaller card than the placeholder it
- * replaced (#354). These tests hold the two halves of the rule: a card is drawn at the shape its run is
- * asked for, and filling it changes only what is inside it.
+ * Two bugs are the counter to here. First, a card was resized when its picture landed, so the card the user was
+ * looking at changed size the moment it had something in it (#354). Second — the one #359 is about — the shape
+ * itself was computed twice: once for the card and once for the request, with different rules, so a card could be
+ * drawn square next to a run that was asked for 16:9. These tests hold both halves: the box comes from the graph
+ * the run will submit, through `planRunShape`, and filling a card changes only what is inside it.
  */
 
 const IMAGE_SPEC = getNodeSpec(CanvasNodeType.Image);
+
+/**
+ * A config whose models answer the shape question the way the server does.
+ *
+ * `output` is what `/api/workflows` publishes, derived from the graph (#359); a model listed without one is the
+ * three-state "the graph was read and nothing can be claimed", which is a case these tests hold too.
+ */
+function configFor(models: Array<Partial<ChannelModel> & { name: string }>, size = "auto"): AiConfig {
+    return {
+        baseUrl: "http://127.0.0.1:8190/v1",
+        channels: [{ id: "local", name: "Local", baseUrl: "http://127.0.0.1:8190/v1", models: models.map((model) => ({ capability: "image", ...model })) }],
+        model: models[0]?.name || "",
+        imageModel: models[0]?.name || "",
+        size,
+    } as unknown as AiConfig;
+}
+
+const graphSizesByAsk = { name: "image-zit", output: { sizedBy: "ask", pixels: "832x1216" } };
+const graphDrawsItsOwnSquare = { name: "image-qwen", output: { sizedBy: "squareOf", key: "resolution", pixels: "1024x1024" } };
+const graphKeepsItsSource = { name: "image-upscale", output: { sizedBy: "source" } };
+const graphStatesItsOwnCanvas = { name: "image-outpaint", output: { sizedBy: "ask" } };
+const graphSaysNothing = { name: "image-unknown" };
+
+/** A box a run actually settled the card at. Every case using this states a shape, so `{}` — "nothing to change" —
+ *  is a failure worth naming before the numbers are taken apart. */
+function settledBox(box: Partial<MediaShape>): MediaShape {
+    expect(box.width).toEqual(expect.any(Number));
+    expect(box.height).toEqual(expect.any(Number));
+    return { width: box.width as number, height: box.height as number };
+}
 
 function emptyCard(type: CanvasNodeType, box = { width: 300, height: 200 }, metadata: CanvasNodeData["metadata"] = {}): CanvasNodeData {
     return { id: `card-${type}`, type, position: { x: 40, y: 60 }, ...box, metadata: { content: "", status: "idle", ...metadata } };
@@ -30,19 +62,94 @@ function clip(width: number, height: number) {
     return { url: "http://127.0.0.1:8190/api/canvases/abc/files/task_1.mp4", storageKey: "files/task_1.mp4", bytes: 100, mimeType: "video/mp4", width, height };
 }
 
+describe("the shape a run will draw", () => {
+    test("a graph sized by the ask draws the card at the size the ask states", () => {
+        const config = configFor([graphSizesByAsk]);
+        const wide = planRunShape(config, CanvasNodeType.Image, { model: "image-zit", size: "1536x864" });
+        expect(wide.size).toBe("1536x864");
+        expect(wide.shape!.width / wide.shape!.height).toBeCloseTo(16 / 9, 4);
+    });
+
+    test("`auto` sends no size, and the card is the shape the graph draws unasked", () => {
+        const config = configFor([graphSizesByAsk]);
+        const asked = planRunShape(config, CanvasNodeType.Image, { model: "image-zit", size: "auto" });
+        // The graph's own answer is 832x1216 — a portrait. A square invented here is what letterboxed every
+        // Z-Image card while the graph drew 832x1216.
+        expect(asked.size).toBeUndefined();
+        expect(asked.shape).toEqual({ width: 832, height: 1216 });
+    });
+
+    test("a graph that sizes itself by its own knob draws a square, of that knob", () => {
+        const config = configFor([graphDrawsItsOwnSquare]);
+        const stated = planRunShape(config, CanvasNodeType.Image, { model: "image-qwen", size: "1536x864", params: { resolution: 1536 } });
+        expect(stated.shape).toEqual({ width: 1536, height: 1536 });
+        // No size belongs in the request: nothing in that graph reads one.
+        expect(stated.size).toBeUndefined();
+        // Without the knob, the number the graph itself carries answers.
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-qwen" }).shape).toEqual({ width: 1024, height: 1024 });
+    });
+
+    test("a graph that keeps the picture it was handed draws that picture's shape", () => {
+        const config = configFor([graphKeepsItsSource]);
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-upscale", size: "1024x1024" }, { width: 2048, height: 864 }).shape).toEqual({ width: 2048, height: 864 });
+        // Handed no picture, nothing is claimed: the card keeps the box it has.
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-upscale" }).shape).toBeUndefined();
+    });
+
+    test("a graph that says nothing claims nothing — `auto` does not become a square", () => {
+        const config = configFor([graphSaysNothing]);
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-unknown", size: "auto" })).toEqual({});
+        // A stated size is still the ask, because that is all that is known about it.
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-unknown", size: "1536x864" }).shape).toEqual({ width: 1536, height: 864 });
+    });
+
+    test("a graph sized by a canvas the request states claims no shape for the run that states none", () => {
+        const config = configFor([graphStatesItsOwnCanvas]);
+        // An outpaint graph's canvas arrives through its own parameters, so the graph says the ask owns the
+        // shape and says nothing about the numbers left in its nodes. Nothing here invents the difference:
+        // a default read off the graph would square a card the outpaint dialog drew at the canvas it asked for.
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-outpaint", size: "auto", imageMode: "outpaint" })).toEqual({});
+        // A stated size is still the ask, because that is all that is known about it.
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-outpaint", size: "1280x2272" }).shape).toEqual({ width: 1280, height: 2272 });
+    });
+
+    test("a bare ratio is refused as a size, by the card and by the request alike", () => {
+        const config = configFor([graphSizesByAsk]);
+        // `2:1` was where the two readers came apart: a 1536x864 card next to a run asked for 2048x1024.
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-zit", size: "2:1" })).toEqual({ problem: "shapeOnly" });
+    });
+
+    test("a mode's own graph is asked, not the workflow's", () => {
+        const config = configFor([{ ...graphSizesByAsk, contracts: { inpaint: { output: { sizedBy: "source" } } } }]);
+        expect(planRunShape(config, CanvasNodeType.Image, { model: "image-zit", imageMode: "inpaint", size: "1024x1024" }, { width: 900, height: 1600 }).shape).toEqual({ width: 900, height: 1600 });
+    });
+
+    test("the card and the request are the same number, for every shape either could state", () => {
+        const config = configFor([graphSizesByAsk]);
+        for (const size of ["1024x1024", "1536x864", "864x1536", "2048x1152", "1024x768"]) {
+            const plan = planRunShape(config, CanvasNodeType.Image, { model: "image-zit", size });
+            const box = nodeSizeForRun(config, emptyCard(CanvasNodeType.Image), { model: "image-zit", size });
+            expect(box.width / box.height).toBeCloseTo(plan.shape!.width / plan.shape!.height, 4);
+            expect(plan.size).toBe(size);
+        }
+    });
+});
+
 describe("the box an empty card is drawn at", () => {
     test("a square ask makes a square card, not the type table's wide one", () => {
-        const box = nodeSizeForRun(emptyCard(CanvasNodeType.Image), { size: "1024x1024" });
+        const config = configFor([graphSizesByAsk]);
+        const box = nodeSizeForRun(config, emptyCard(CanvasNodeType.Image), { model: "image-zit", size: "1024x1024" });
         expect(box).toEqual({ width: IMAGE_SPEC.height, height: IMAGE_SPEC.height });
         expect(box.width).toBeLessThan(IMAGE_SPEC.width);
     });
 
     test("a ratio the panel offers is kept, not bent to the card", () => {
-        const wide = nodeSizeForRun(emptyCard(CanvasNodeType.Image), { size: "1536x864" });
+        const config = configFor([graphSizesByAsk]);
+        const wide = nodeSizeForRun(config, emptyCard(CanvasNodeType.Image), { model: "image-zit", size: "1536x864" });
         expect(wide.width / wide.height).toBeCloseTo(16 / 9, 4);
         expect(wide.width).toBe(IMAGE_SPEC.width);
 
-        const tall = nodeSizeForRun(emptyCard(CanvasNodeType.Image), { size: "864x1536" });
+        const tall = nodeSizeForRun(config, emptyCard(CanvasNodeType.Image), { model: "image-zit", size: "864x1536" });
         expect(tall.width / tall.height).toBeCloseTo(9 / 16, 4);
         // A tall shape fitted into a wide card would come out narrower than any card the canvas will hold
         // (#270 states that floor to the agent), so the pair grows instead.
@@ -50,58 +157,77 @@ describe("the box an empty card is drawn at", () => {
         expect(tall.height).toBeGreaterThanOrEqual(NODE_MIN_SIZE.height);
     });
 
-    test("`auto` and a bare ratio are answered the way the run answers them", () => {
-        // A picture run with `auto` draws at the graph's own resolution, which is a square (#306); a bare
-        // ratio is drawn at the scale the panel's own scale pill implies.
-        for (const size of ["auto", "", "1:1"]) {
-            const box = nodeSizeForRun(emptyCard(CanvasNodeType.Image), { size });
-            expect(box.width).toBeCloseTo(box.height, 4);
-        }
-        const ratio = nodeSizeForRun(emptyCard(CanvasNodeType.Image), { size: "16:9" });
-        expect(ratio.width / ratio.height).toBeCloseTo(16 / 9, 4);
-    });
-
     test("the node's own setting is asked first, the canvas's next", () => {
+        const config = configFor([graphSizesByAsk], "1024x1024");
         const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { size: "1536x864" });
-        const own = nodeSizeForRun(card, { size: "1024x1024" });
-        expect(own.width / own.height).toBeCloseTo(16 / 9, 4);
-        const inherited = nodeSizeForRun(emptyCard(CanvasNodeType.Image), { size: "1024x1024" });
-        expect(inherited.width).toBeCloseTo(inherited.height, 4);
+        expect(nodeSizeForRun(config, card).width / nodeSizeForRun(config, card).height).toBeCloseTo(16 / 9, 4);
+        // With nothing on the node, the canvas's setting is the ask.
+        expect(nodeSizeForRun(config, emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { model: "image-zit" }))).toEqual({ width: IMAGE_SPEC.height, height: IMAGE_SPEC.height });
     });
 
     test("a film's card holds the shape its run will be told, and the tier does not move it", () => {
-        const automatic = nodeSizeForRun(emptyCard(CanvasNodeType.Video), { size: "auto", vquality: "720" });
+        const config = configFor([{ name: "video-h3", capability: "video", output: { sizedBy: "ask", pixels: "1344x768" } }]);
+        const automatic = nodeSizeForRun(config, emptyCard(CanvasNodeType.Video), { model: "video-h3", size: "auto", vquality: "720" });
         expect(automatic.width / automatic.height).toBeCloseTo(16 / 9, 4);
-        const square = nodeSizeForRun(emptyCard(CanvasNodeType.Video, { width: 300, height: 300 }, { size: "1024x1024" }), { size: "1024x1024" });
+        const square = nodeSizeForRun(config, emptyCard(CanvasNodeType.Video), { model: "video-h3", size: "1024x1024", vquality: "720" });
         expect(square.width).toBeCloseTo(square.height, 4);
         // A tier changes how many pixels the clip is rendered at, not what shape it is.
-        expect(nodeSizeForRun(emptyCard(CanvasNodeType.Video), { size: "1280x720", vquality: "720" })).toEqual(nodeSizeForRun(emptyCard(CanvasNodeType.Video), { size: "1920x1080", vquality: "1080" }));
+        expect(nodeSizeForRun(config, emptyCard(CanvasNodeType.Video), { model: "video-h3", size: "1280x720", vquality: "720" })).toEqual(nodeSizeForRun(config, emptyCard(CanvasNodeType.Video), { model: "video-h3", size: "1920x1080", vquality: "1080" }));
     });
 
     test("a card with no shape to hold keeps the card its type starts with", () => {
+        const config = configFor([graphSizesByAsk]);
         for (const type of [CanvasNodeType.Audio, CanvasNodeType.Text, CanvasNodeType.Group, CanvasNodeType.Lora]) {
             const spec = getNodeSpec(type);
-            expect(nodeSizeForRun(emptyCard(type), { size: "864x1536" })).toEqual({ width: spec.width, height: spec.height });
+            expect(nodeSizeForRun(config, emptyCard(type), { model: "image-zit", size: "864x1536" })).toEqual({ width: spec.width, height: spec.height });
         }
+    });
+});
+
+describe("the box a shape is drawn at, once", () => {
+    test("one function, for every writer of a card's box: the shape, inside the box, never under the floor", () => {
+        expect(fitBox({ width: 1920, height: 1080 }, { width: 640, height: 640 })).toEqual({ width: 640, height: 360 });
+        // The floor grows the pair rather than bending the shape (#270).
+        const tall = fitBox({ width: 864, height: 1536 }, { width: 340, height: 240 });
+        expect(tall.width / tall.height).toBeCloseTo(864 / 1536, 4);
+        expect(tall.width).toBeGreaterThanOrEqual(NODE_MIN_SIZE.width);
+        // An extreme shape keeps its shape instead of growing into an impossible card.
+        const strip = fitBox({ width: 4000, height: 200 }, { width: 640, height: 640 });
+        expect(strip.width).toBe(640);
+        expect(strip.width / strip.height).toBeCloseTo(20, 4);
+    });
+
+    test("the shape a card holds is its picture's, not the box it happens to have", () => {
+        const dragged = emptyCard(CanvasNodeType.Image, { width: 700, height: 300 }, { content: "http://example/x.png", naturalWidth: 1024, naturalHeight: 1024 });
+        expect(nodeShape(dragged)).toEqual({ width: 1024, height: 1024 });
     });
 });
 
 describe("a card created for a run carries that box", () => {
     test("a new picture card is the shape the canvas is set to draw", () => {
+        const config = configFor([graphSizesByAsk], "1024x1024");
         const centre = { x: 500, y: 400 };
-        const node = createCanvasNode(CanvasNodeType.Image, centre, { size: "1024x1024" });
+        const node = createCanvasNode(config, CanvasNodeType.Image, centre, { model: "image-zit" });
         expect(node.width).toBeCloseTo(node.height, 4);
         expect(node.position).toEqual({ x: centre.x - node.width / 2, y: centre.y - node.height / 2 });
     });
 
+    test("a new card with no size stated is the shape the graph draws unasked", () => {
+        const config = configFor([graphSizesByAsk]);
+        const node = createCanvasNode(config, CanvasNodeType.Image, { x: 500, y: 400 }, { model: "image-zit" });
+        expect(node.width / node.height).toBeCloseTo(832 / 1216, 4);
+    });
+
     test("a new film card is the shape its run will render", () => {
-        const node = createCanvasNode(CanvasNodeType.Video, { x: 500, y: 400 }, { size: "9:16", vquality: "720" });
+        const config = configFor([{ name: "video-h3", capability: "video", output: { sizedBy: "ask", pixels: "1344x768" } }], "9:16");
+        const node = createCanvasNode(config, CanvasNodeType.Video, { x: 500, y: 400 }, { model: "video-h3", vquality: "720" });
         expect(node.width / node.height).toBeCloseTo(9 / 16, 4);
         expect(node.width).toBeGreaterThanOrEqual(NODE_MIN_SIZE.width);
     });
 
     test("a card the canvas has no settings for still gets a card it can be clicked on", () => {
-        const node = createCanvasNode(CanvasNodeType.Audio, { x: 10, y: 10 }, { seconds: "6" });
+        const config = configFor([graphSizesByAsk]);
+        const node = createCanvasNode(config, CanvasNodeType.Audio, { x: 10, y: 10 }, { seconds: "6" });
         const spec = getNodeSpec(CanvasNodeType.Audio);
         expect({ width: node.width, height: node.height }).toEqual({ width: spec.width, height: spec.height });
     });
@@ -109,7 +235,8 @@ describe("a card created for a run carries that box", () => {
 
 describe("filling a card does not move it", () => {
     test("a picture lands in the box that was made for it, and the card keeps its size", () => {
-        const card = createCanvasNode(CanvasNodeType.Image, { x: 500, y: 400 }, { size: "1024x1024" });
+        const config = configFor([graphSizesByAsk], "1024x1024");
+        const card = createCanvasNode(config, CanvasNodeType.Image, { x: 500, y: 400 }, { model: "image-zit" });
         const filled = applyGeneratedImage(card, picture(1024, 1024));
         // The sentence the bug report asked for: the same card, empty and full, the same size.
         expect({ width: filled.width, height: filled.height, position: filled.position }).toEqual({ width: card.width, height: card.height, position: card.position });
@@ -118,13 +245,15 @@ describe("filling a card does not move it", () => {
     });
 
     test("a run that answers with a different shape is drawn inside the card, not by resizing it", () => {
-        const card = createCanvasNode(CanvasNodeType.Image, { x: 500, y: 400 }, { size: "1024x1024" });
+        const config = configFor([graphSizesByAsk], "1024x1024");
+        const card = createCanvasNode(config, CanvasNodeType.Image, { x: 500, y: 400 }, { model: "image-zit" });
         const filled = applyGeneratedImage(card, picture(1920, 1080));
         expect({ width: filled.width, height: filled.height }).toEqual({ width: card.width, height: card.height });
     });
 
     test("the same for a film: the clip does not restyle the card", () => {
-        const card = createCanvasNode(CanvasNodeType.Video, { x: 500, y: 400 }, { size: "1024x1024", vquality: "720" });
+        const config = configFor([{ name: "video-h3", capability: "video", output: { sizedBy: "ask", pixels: "1344x768" } }], "1024x1024");
+        const card = createCanvasNode(config, CanvasNodeType.Video, { x: 500, y: 400 }, { model: "video-h3", vquality: "720" });
         const filled = applyGeneratedVideo(card, clip(1920, 1080), { prompt: "panned left" });
         expect({ width: filled.width, height: filled.height, position: filled.position }).toEqual({ width: card.width, height: card.height, position: card.position });
         expect(filled.metadata?.prompt).toBe("panned left");
@@ -133,46 +262,63 @@ describe("filling a card does not move it", () => {
 
 describe("a settings change moves an empty card and never a filled one", () => {
     test("an empty card takes the shape the panel just picked", () => {
-        const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 });
-        const next = applyNodeConfigPatch(card, { size: "1536x864" });
+        const config = configFor([graphSizesByAsk]);
+        const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { model: "image-zit" });
+        const next = applyNodeConfigPatch(config, card, { size: "1536x864" });
         expect(next.width / next.height).toBeCloseTo(16 / 9, 4);
         expect(next.metadata?.size).toBe("1536x864");
     });
 
     test("a card that holds a picture keeps that picture's shape (#264)", () => {
-        const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { content: "http://example/x.png", naturalWidth: 300, naturalHeight: 200 });
-        const next = applyNodeConfigPatch(card, { size: "1536x864" });
+        const config = configFor([graphSizesByAsk]);
+        const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { content: "http://example/x.png", naturalWidth: 300, naturalHeight: 200, model: "image-zit" });
+        const next = applyNodeConfigPatch(config, card, { size: "1536x864" });
         expect({ width: next.width, height: next.height }).toEqual({ width: 300, height: 200 });
         expect(next.metadata?.size).toBe("1536x864");
     });
 
     test("a setting that decides no shape leaves a box alone", () => {
-        const card = createCanvasNode(CanvasNodeType.Image, { x: 500, y: 400 }, { size: "1024x1024" });
-        const next = applyNodeConfigPatch(card, { seed: "424242", seedFixed: "true" });
+        const config = configFor([graphSizesByAsk], "1024x1024");
+        const card = createCanvasNode(config, CanvasNodeType.Image, { x: 500, y: 400 }, { model: "image-zit" });
+        const next = applyNodeConfigPatch(config, card, { seed: "424242", seedFixed: "true" });
         expect({ width: next.width, height: next.height, position: next.position }).toEqual({ width: card.width, height: card.height, position: card.position });
         expect(next.metadata?.seed).toBe("424242");
     });
 });
 
 describe("a step is handed a picture, not a size", () => {
-    test("a run that states no size leaves the card it was made with", () => {
+    test("a run whose graph takes no shape leaves the card it was made with", () => {
+        const config = configFor([graphKeepsItsSource]);
         const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 });
-        expect(cardBoxForRun(card, {})).toEqual({});
-        expect(cardBoxForRun(card, undefined)).toEqual({});
+        expect(cardBoxForRun(config, card, { model: "image-upscale" })).toEqual({});
+        expect(cardBoxForRun(config, card, { model: "image-upscale", size: "1024x1024" })).toEqual({});
+    });
+
+    test("a step card is drawn at the picture it was handed, not at its parent's box", () => {
+        const config = configFor([graphKeepsItsSource]);
+        // A card dragged out of step with its picture (#264 keeps the drag free, the shape fixed): the child
+        // follows the picture, and the parent's box is not evidence of the child's shape.
+        const parent = emptyCard(CanvasNodeType.Image, { width: 700, height: 300 }, { content: "http://example/x.png", naturalWidth: 1024, naturalHeight: 1024, model: "image-upscale" });
+        const box = settledBox(cardBoxForRun(config, parent, { model: "image-upscale" }, nodeShape(parent)));
+        expect(box.width).toBeCloseTo(box.height, 4);
     });
 
     test("a run asked for the shape the card already has answers with nothing to change", () => {
-        const square = nodeSizeForRun(emptyCard(CanvasNodeType.Image), { size: "1024x1024" });
-        const card = emptyCard(CanvasNodeType.Image, square);
-        expect(cardBoxForRun(card, { size: "1024x1024" })).toEqual({});
+        const config = configFor([graphSizesByAsk]);
+        const square = nodeSizeForRun(config, emptyCard(CanvasNodeType.Image), { model: "image-zit", size: "1024x1024" });
+        const card = emptyCard(CanvasNodeType.Image, square, { model: "image-zit" });
+        expect(cardBoxForRun(config, card, { model: "image-zit", size: "1024x1024" })).toEqual({});
     });
 
     test("a run asked for another shape settles the card once, before it starts — and leaves its corner alone", () => {
-        const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 });
-        const asked = nodeSizeForRun(card, { size: "1024x1024" });
-        expect(asked.width).toBeCloseTo(asked.height, 4);
-        const box = cardBoxForRun(card, { size: "1024x1024" });
-        expect(box).toEqual(asked);
+        const config = configFor([graphSizesByAsk]);
+        const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { model: "image-zit" });
+        const box = settledBox(cardBoxForRun(config, card, { model: "image-zit", size: "1024x1024" }));
+        // The shape the run was asked for, inside the card's box, and never under the floor the drag refuses.
+        expect(box.width).toBeCloseTo(box.height, 4);
+        expect(box.width).toBeGreaterThanOrEqual(NODE_MIN_SIZE.width);
+        // Pressing it again changes nothing: the box already answers the ask.
+        expect(cardBoxForRun(config, { ...card, ...box }, { model: "image-zit", size: "1024x1024" })).toEqual({});
         // Only the box: the top-left stays where it was, as `resize_node` keeps it (#270).
         expect(box).not.toHaveProperty("position");
     });

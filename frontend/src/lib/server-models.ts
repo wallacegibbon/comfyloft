@@ -1,5 +1,5 @@
 import { isToolWorkflow } from "@/lib/canvas/tool-workflows";
-import type { ServerWorkflow, WorkflowAccepts } from "@/services/api/workflows";
+import type { ServerWorkflow, WorkflowAccepts, WorkflowOutputShape } from "@/services/api/workflows";
 import type { ChannelModel, ModelAccepts, ModelCapability } from "@/stores/use-config-store";
 
 /**
@@ -52,6 +52,18 @@ function inputsOf(inputs: string[] | undefined) {
     if (!Array.isArray(inputs)) return undefined;
     const keys = inputs.filter((key): key is string => typeof key === "string" && Boolean(key.trim())).map((key) => key.trim());
     return keys.length ? keys : undefined;
+}
+
+/**
+ * What the graph says sizes its own output, as the server read it.
+ *
+ * Nothing is claimed when the server said nothing — an absent answer is not "the request states it", and a client
+ * that fills the gap with a guess is what drew square cards around portrait pictures (#359).
+ */
+function outputOf(output: WorkflowOutputShape | undefined) {
+    const sizedBy = typeof output?.sizedBy === "string" ? output.sizedBy.trim() : "";
+    if (!sizedBy) return undefined;
+    return { sizedBy, key: output?.key?.trim() || undefined, pixels: output?.pixels?.trim() || undefined };
 }
 
 /** Whether the workflow can be asked something in words. */
@@ -107,7 +119,7 @@ export function modelsOf(workflow: ServerWorkflow): ChannelModel[] {
     if (workflow.availability?.available === false) return [];
     const duration = durationOf(workflow);
     const contracts = workflow.variantContracts
-        ? Object.fromEntries(Object.entries(workflow.variantContracts).map(([mode, contract]) => [mode, { accepts: acceptsOf(contract?.accepts), mode: contract?.mode, inputs: inputsOf(contract?.inputs) }]))
+        ? Object.fromEntries(Object.entries(workflow.variantContracts).map(([mode, contract]) => [mode, { accepts: acceptsOf(contract?.accepts), mode: contract?.mode, inputs: inputsOf(contract?.inputs), output: outputOf(contract?.output) }]))
         : undefined;
 
     return (workflow.models || []).map((model) => ({
@@ -131,6 +143,7 @@ export function modelsOf(workflow: ServerWorkflow): ChannelModel[] {
         mode: workflow.mode || undefined,
         accepts: acceptsOf(workflow.accepts),
         inputs: inputsOf(workflow.inputs),
+        output: outputOf(workflow.output),
         contracts,
         parameters: parametersOf(workflow),
     }));
@@ -168,6 +181,7 @@ export function modelSignature(models: ChannelModel[]) {
             model.mode || "",
             model.accepts || null,
             model.inputs || null,
+            model.output || null,
             model.contracts || null,
             model.parameters || null,
         ]),

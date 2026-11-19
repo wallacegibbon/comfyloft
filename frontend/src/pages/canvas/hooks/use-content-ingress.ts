@@ -7,10 +7,11 @@ import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
 import { isAudioFile } from "@/lib/canvas/canvas-generation-helpers";
 import { VIDEO_NODE_MAX_HEIGHT, VIDEO_NODE_MAX_WIDTH } from "@/lib/canvas/canvas-generated-video";
 import { audioMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
-import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
+import { fitBox, IMAGE_CARD_MAX_SIZE } from "@/lib/canvas/canvas-node-size";
 import { NODE_STATUS_SUCCESS } from "@/lib/canvas/canvas-node-status";
 import { uploadMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
+import { useEffectiveConfig } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasNodeData, type ContextMenuState, type Position } from "@/types/canvas";
 
 /**
@@ -42,6 +43,9 @@ function acceptedFiles(list: FileList | null): File[] {
 export function useContentIngress(deps: ContentIngressDeps) {
     const { setNodes, setSelectedNodeIds, setSelectedConnectionId, setDialogNodeId, setContextMenu, containerRef, size, screenToCanvas, getCanvasCenter } = deps;
     const { t } = useTranslation();
+    // A card that will hold a run's picture is drawn at that run's shape, so even the node this hook makes out of
+    // a clipboard is sized through the same question (#359).
+    const effectiveConfig = useEffectiveConfig();
 
     // The hidden <input type="file"> in the page's JSX. Not a dependency the page passes in: the
     // module owns the picker, so it owns the element the picker clicks.
@@ -64,7 +68,7 @@ export function useContentIngress(deps: ContentIngressDeps) {
 
     const createImageFileNode = useCallback(async (file: File, position: Position) => {
         const image = await uploadImage(file);
-        const size = fitNodeSize(image.width, image.height);
+        const size = fitBox({ width: image.width, height: image.height }, IMAGE_CARD_MAX_SIZE);
         const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const newNode: CanvasNodeData = {
             id,
@@ -83,7 +87,7 @@ export function useContentIngress(deps: ContentIngressDeps) {
 
     const createVideoFileNode = useCallback(async (file: File, position: Position) => {
         const video = await uploadMediaFile(file, "video");
-        const size = fitNodeSize(video.width || 1280, video.height || 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+        const size = fitBox({ width: video.width || 1280, height: video.height || 720 }, { width: VIDEO_NODE_MAX_WIDTH, height: VIDEO_NODE_MAX_HEIGHT });
         const id = `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         setNodes((prev) => [
             ...prev,
@@ -126,7 +130,7 @@ export function useContentIngress(deps: ContentIngressDeps) {
             if (!trimmed) return false;
 
             const node = {
-                ...createCanvasNode(CanvasNodeType.Text, getCanvasCenter(), { content: trimmed, status: NODE_STATUS_SUCCESS }),
+                ...createCanvasNode(effectiveConfig, CanvasNodeType.Text, getCanvasCenter(), { content: trimmed, status: NODE_STATUS_SUCCESS }),
                 title: trimmed.slice(0, 32) || t("canvas.runtime.clipboardText"),
             };
 
@@ -137,7 +141,7 @@ export function useContentIngress(deps: ContentIngressDeps) {
             setDialogNodeId(node.id);
             return true;
         },
-        [getCanvasCenter, t],
+        [effectiveConfig, getCanvasCenter, t],
     );
 
     const pasteSystemClipboard = useCallback(async () => {

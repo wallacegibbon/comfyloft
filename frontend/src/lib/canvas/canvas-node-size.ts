@@ -1,111 +1,100 @@
 import { getNodeSpec } from "@/constant/canvas";
-import { inferMediaRatio, inferMediaScale, inferVideoRatio, parseVideoResolution, readMediaDimensions, readVideoDimensions } from "@/lib/media-size";
-import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
-
-export function fitNodeSize(width: number, height: number, maxWidth = 640, maxHeight = 640) {
-    const w = Math.max(1, width);
-    const h = Math.max(1, height);
-    const scale = Math.min(1, maxWidth / w, maxHeight / h);
-    return { width: w * scale, height: h * scale };
-}
+import { IMAGE_MAX_RATIO } from "@/lib/media-size";
+import { planRunShape, runAskOf, type MediaShape, type RunAsk } from "@/lib/canvas/run-shape";
+import type { CanvasNodeData } from "@/types/canvas";
+import type { AiConfig } from "@/stores/use-config-store";
 
 /**
- * The smallest a card may be: one number for the user's drag and for anything else that resizes a card.
+ * The card's box.
  *
- * The drag clamped to these and nothing else did, so an agent asking for a 100-pixel card had no floor to be
- * told about. They are the same two numbers, in the one place both readers look.
+ * A card frames a picture, so its box is that picture's shape: drawn at the shape the next run is asked for, and
+ * a result is only ever put *inside* it. Nothing here decides what that shape is — `run-shape.ts` answers that,
+ * from the graph the run will submit — and nothing here is allowed to make a card a different shape than the
+ * picture it holds.
+ */
+
+/**
+ * The smallest a card may be: one number for the user's drag, for anything else that resizes a card, and for the
+ * agent's `resize_node`.
+ *
+ * The drag clamped to these and nothing else did, so an agent asking for a 100-pixel card had no floor to be told
+ * about, and a card drawn below one could not be dragged back. They are the same two numbers, in the one place
+ * every reader looks.
  */
 export const NODE_MIN_SIZE = { width: 220, height: 160 };
 
 /**
- * The shape a card holds: the picture's own pixels when they are known, else the card's current box.
+ * The shape of the picture a card holds: its own pixels when they are known, else the box the card has.
  *
- * A card that frames a picture keeps this ratio when it is resized, and its own metadata is what says so —
- * `naturalWidth`/`naturalHeight` are written when the picture arrives. A card with neither (an empty one, or
- * one written before they were recorded) keeps the shape it happens to have, which is why the fallback is the
- * box rather than a constant.
+ * `naturalWidth`/`naturalHeight` are written when a picture lands, so a card that has one answers from the picture
+ * rather than from itself. A card with neither (an empty one) keeps the box it happens to have, which is why the
+ * fallback is the box and not a constant.
  */
+export function nodeShape(node: Pick<CanvasNodeData, "width" | "height" | "metadata">): MediaShape {
+    return { width: node.metadata?.naturalWidth || node.width, height: node.metadata?.naturalHeight || node.height || 1 };
+}
+
+/** A card's shape as a ratio, for the readers that resize one side and must keep the other. */
 export function nodeRatio(node: Pick<CanvasNodeData, "width" | "height" | "metadata">) {
-    const width = node.metadata?.naturalWidth || node.width;
-    const height = node.metadata?.naturalHeight || node.height || 1;
-    return width / Math.max(1, height);
-}
-
-/** A shape in pixels, from whichever reader knows what the next run is asked to draw. */
-type NodeOutputShape = { width: number; height: number };
-
-/** The two settings that decide a run's shape. Read structurally, so an `AiConfig` or a node's own metadata answers. */
-export type RunShapeSettings = { size?: unknown; vquality?: unknown };
-
-/**
- * What the run a node is pointed at is being asked to draw, in pixels — the shape of the *ask*, not of an answer.
- *
- * These are the two functions the settings panels already use to write their own size pills (`readMediaDimensions`,
- * `readVideoDimensions`), so a card drawn from them is the shape the request will ask the graph for. A size that
- * says only a ratio ("16:9") is answered at the scale the panel's own scale pill implies, and `auto` is answered
- * the way the graphs read it: a square for a picture (#306), the model's own 16:9 tier for a film.
- *
- * A kind with no shape — words, a sound, a group, a LoRA — has no answer, and that is the honest one: nothing
- * about its card is decided by a size.
- */
-function requestedOutputShape(kind: string, settings: RunShapeSettings): NodeOutputShape | undefined {
-    const stated = typeof settings.size === "string" ? settings.size.trim() : "";
-    const dimensions =
-        kind === CanvasNodeType.Image
-            ? readMediaDimensions(stated, inferMediaScale(stated), inferMediaRatio(stated))
-            : kind === CanvasNodeType.Video
-              ? readVideoDimensions(stated || "auto", parseVideoResolution(typeof settings.vquality === "string" ? settings.vquality : undefined), inferVideoRatio(stated || "auto"))
-              : { width: 0, height: 0 };
-    return dimensions.width > 0 && dimensions.height > 0 ? dimensions : undefined;
+    const shape = nodeShape(node);
+    return shape.width / Math.max(1, shape.height);
 }
 
 /**
- * The box a card takes to hold a picture of that shape: the shape itself, inside the card's own size, never under
- * the floor the drag refuses to go below.
+ * The box that holds a shape inside a box: the shape itself, inside the limits, never under the floor.
  *
- * The floor matters more than it looks: a 9:16 card fitted into a 340×240 one is 135 wide, which no drag, and no
- * `resize_node` call, would accept (#270). Growing the pair keeps the shape and lands on the narrowest card the
- * canvas will hold — the same card the drag would have settled on.
+ * This is the only code in the canvas that turns a shape into a size, and every writer of a card's box goes
+ * through it — a run's ask, a pasted picture, a crop, a frame out of a film. The floor matters more than it looks:
+ * a 9:16 card fitted into a 340×240 one is 135 wide, which no drag and no `resize_node` call would accept (#270).
+ * Growing the pair keeps the shape and lands on the narrowest card the canvas will hold.
+ *
+ * The floor is what the drag and `resize_node` refuse to go under, so it is honoured: the pair grows. A shape
+ * outside the aspect the canvas accepts for a picture is material rather than an ask, and no pair both keeps it
+ * and stays inside a card — those are kept inside the limits, so a panorama stays a panorama instead of becoming
+ * a card 3200 wide. Something that is not a card — a preview drawn inside one — passes no floor, because it has
+ * to stay inside the card that holds it.
  */
-export function nodeSizeFromShape(shape: NodeOutputShape, baseWidth: number, baseHeight: number) {
-    const ratio = Math.max(1, shape.width) / Math.max(1, shape.height);
-    if (!Number.isFinite(ratio) || ratio < 0.25 || ratio > 4) return { width: baseWidth, height: baseHeight };
-    const box = ratio >= baseWidth / Math.max(1, baseHeight) ? { width: baseWidth, height: baseWidth / ratio } : { width: baseHeight * ratio, height: baseHeight };
-    const grow = Math.max(NODE_MIN_SIZE.width / box.width, NODE_MIN_SIZE.height / box.height);
-    return grow > 1 ? { width: box.width * grow, height: box.height * grow } : box;
+export function fitBox(shape: MediaShape, limits: MediaShape, floor: MediaShape = NODE_MIN_SIZE): MediaShape {
+    const ratio = shape.width / Math.max(1, shape.height);
+    if (!Number.isFinite(ratio) || ratio <= 0) return { width: limits.width, height: limits.height };
+    const box = ratio >= limits.width / Math.max(1, limits.height) ? { width: limits.width, height: limits.width / ratio } : { width: limits.height * ratio, height: limits.height };
+    const grow = Math.max(floor.width / box.width, floor.height / box.height);
+    if (grow <= 1 || ratio > IMAGE_MAX_RATIO || ratio < 1 / IMAGE_MAX_RATIO) return box;
+    return { width: box.width * grow, height: box.height * grow };
 }
+
+/** The ceiling a picture card is drawn under. A film's own ceiling is smaller, and lives with the film's writer. */
+export const IMAGE_CARD_MAX_SIZE = { width: 640, height: 640 };
 
 /**
  * The box a card is drawn at for the run it is about to make.
  *
  * This is the whole reason a card's size does not change when its picture lands: the box is decided by the ask —
- * the node's own size setting, else the canvas's, the same precedence `buildGenerationConfig` uses for those two
- * keys — and a result is only ever put *inside* it. A card of a kind with no shape keeps the card its type
- * starts with.
+ * the node's own settings first, the canvas's otherwise, the same precedence `buildGenerationConfig` uses — and
+ * the ask's shape is what the graph the run will submit says it is, not what this file would guess (#359). A card
+ * of a kind with no shape (words, a sound, a group) keeps the box its type starts with.
  */
-export function nodeSizeForRun(node: Pick<CanvasNodeData, "type" | "metadata">, settings: RunShapeSettings = {}) {
+export function nodeSizeForRun(config: AiConfig, node: Pick<CanvasNodeData, "type" | "metadata">, ask?: RunAsk) {
     const spec = getNodeSpec(node.type);
-    const shape = requestedOutputShape(node.type, {
-        size: node.metadata?.size ?? settings.size,
-        vquality: node.metadata?.vquality ?? settings.vquality,
-    });
-    return shape ? nodeSizeFromShape(shape, spec.width, spec.height) : { width: spec.width, height: spec.height };
+    const shape = planRunShape(config, node.type, ask || runAskOf(node.metadata, config)).shape;
+    return shape ? fitBox(shape, { width: spec.width, height: spec.height }) : { width: spec.width, height: spec.height };
 }
 
 /**
- * The box a card takes for the run it is about to start — and nothing when the run was told no shape.
+ * The box a card takes for the run it is about to start — and nothing when that run states no shape.
  *
- * This is the moment the ask is known, and the only moment it should be acted on: the card takes the shape
- * before the run, and the result is put inside it (#354). A card that was made with the right box answers with
- * `{}` and does not move; a card written by an older build settles once, at the press, instead of mid-run.
+ * This is the moment the ask is known, and the only moment it should be acted on: the card takes the shape before
+ * the run, and the result goes inside it (#354). A card already drawn at that shape answers with `{}` and does not
+ * move; one written by an older build settles once, at the press, instead of mid-run.
  *
- * The "no shape stated" case is a step — an upscaler, an interpolator, an angle re-render is handed a picture,
- * not a size, so its answer keeps the shape of the one in front of it, which is the box its card was made with
- * (#293). Both run builders leave `size` out of the record for exactly that reason, so the absence is the fact
- * and not a guess.
+ * `ask` is the record of the run about to happen (`buildImageGenerationMetadata`'s output), because a run may be
+ * asked something the node's stored settings do not say — an inpaint asked for the source's shape, an upscale
+ * asked for nothing at all. Both are read from the graph's answer, so a step card is drawn at the shape of the
+ * picture it was handed rather than at its parent's box (#293).
  */
-export function cardBoxForRun(node: Pick<CanvasNodeData, "type" | "width" | "height" | "metadata">, ask: RunShapeSettings = {}) {
-    if (typeof ask.size !== "string" || !ask.size) return {};
-    const size = nodeSizeForRun(node, ask);
+export function cardBoxForRun(config: AiConfig, node: Pick<CanvasNodeData, "type" | "width" | "height" | "metadata">, ask?: RunAsk, source?: MediaShape): Partial<MediaShape> {
+    const shape = planRunShape(config, node.type, ask || runAskOf(node.metadata, config), source).shape;
+    if (!shape) return {};
+    const size = fitBox(shape, { width: node.width, height: node.height });
     return Math.abs(size.width - node.width) < 0.5 && Math.abs(size.height - node.height) < 0.5 ? {} : size;
 }

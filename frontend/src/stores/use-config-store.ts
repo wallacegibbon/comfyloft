@@ -34,7 +34,19 @@ type ModelContract = {
     mode?: string;
     /** The keys a run of this mode may carry. */
     inputs?: string[];
+    /** What decides the shape of what a run of this mode draws. */
+    output?: ModelOutputShape;
 };
+
+/**
+ * What decides the shape of a run's picture, as the server read it off the graph that will run (#359).
+ *
+ * `sizedBy` names the owner: `ask` is this client's stated size (and `pixels` is what the graph draws when none
+ * is stated), `squareOf` is one of the workflow's own knobs setting both sides, and `source` is the picture handed
+ * to it. Absent — the three-state reading every other contract field uses — means the graph was read and nothing
+ * can be claimed, which is where a client stops guessing and keeps the shape it was shown.
+ */
+export type ModelOutputShape = { sizedBy: string; key?: string; pixels?: string };
 
 export type ChannelModel = {
     name: string;
@@ -89,6 +101,11 @@ export type ChannelModel = {
     inputs?: string[];
     /** Per-mode contracts, for a workflow that offers several (`t2i`, `edit`, `inpaint`, `outpaint`). */
     contracts?: Record<string, ModelContract>;
+    /**
+     * What decides the shape of what this model draws, in the mode it opens with. A variant is a different graph
+     * and answers differently, so `modelContractOf` prefers the mode's own.
+     */
+    output?: ModelOutputShape;
     /**
      * The knobs the workflow declares (`multiplier`, `upscale_model`), for a node whose panel renders them
      * from data rather than from a list of names. Bounds and option lists come from the same declaration
@@ -183,7 +200,10 @@ export const defaultConfig: AiConfig = {
     systemPrompt: "",
     models: [],
     quality: "auto",
-    size: "1:1",
+    // No shape stated. What a picture is drawn at is the graph's answer, not a number to guess here: the server
+    // publishes the shape each graph draws unasked, and the card is drawn at that (#359). A default of "1:1" here
+    // made a Z-Image card square while the graph it ran drew 832x1216.
+    size: "auto",
     background: "",
     autoFocusOnSelect: false,
 };
@@ -304,8 +324,11 @@ export function modelContractOf(config: AiConfig, value: string, mode?: string):
     const accepts = declared?.accepts ?? model.accepts;
     const resolvedMode = declared?.mode ?? model.mode;
     const inputs = declared?.inputs ?? model.inputs;
-    if (!accepts && !resolvedMode && !inputs) return undefined;
-    return { accepts, mode: resolvedMode, inputs };
+    // A variant is a different graph, so it answers the shape question differently too: Qwen's t2i sizes itself by
+    // the encoder's resolution while its inpaint keeps the picture it was handed (#359).
+    const output = declared?.output ?? model.output;
+    if (!accepts && !resolvedMode && !inputs && !output) return undefined;
+    return { accepts, mode: resolvedMode, inputs, output };
 }
 
 /**
@@ -538,9 +561,10 @@ function normalizeChannelModels(models: Array<string | ChannelModel> | undefined
         const mode = typeof item === "string" ? undefined : item.mode?.trim() || undefined;
         const accepts = typeof item === "string" ? undefined : normalizeAccepts(item.accepts);
         const inputs = typeof item === "string" ? undefined : normalizeInputs(item.inputs);
+        const output = typeof item === "string" ? undefined : normalizeOutputShape(item.output);
         const contracts = typeof item === "string" ? undefined : normalizeContracts(item.contracts);
         const parameters = typeof item === "string" ? undefined : normalizeParameters(item.parameters);
-        result.push({ name, capability, label, workflowId, baseModel, baseModelLabel, variantModes, variantLabels, blockedModes, imageInputs, duration, tool, hasPrompt, bindsSeconds, selfLift, mode, accepts, inputs, contracts, parameters });
+        result.push({ name, capability, label, workflowId, baseModel, baseModelLabel, variantModes, variantLabels, blockedModes, imageInputs, duration, tool, hasPrompt, bindsSeconds, selfLift, mode, accepts, inputs, output, contracts, parameters });
     }
     return result;
 }
@@ -580,16 +604,40 @@ function normalizeAccepts(value: { images?: { min?: number; max?: number }; vide
 }
 
 function normalizeContracts(
-    value: Record<string, { accepts?: { images?: { min?: number; max?: number }; videos?: { min?: number; max?: number }; audios?: { min?: number; max?: number }; minTotal?: number }; mode?: string; inputs?: string[] }> | undefined,
+    value:
+        | Record<
+              string,
+              {
+                  accepts?: { images?: { min?: number; max?: number }; videos?: { min?: number; max?: number }; audios?: { min?: number; max?: number }; minTotal?: number };
+                  mode?: string;
+                  inputs?: string[];
+                  output?: { sizedBy?: unknown; key?: unknown; pixels?: unknown };
+              }
+          >
+        | undefined,
 ) {
     if (!value || typeof value !== "object") return undefined;
-    const contracts: Record<string, { accepts?: ReturnType<typeof normalizeAccepts>; mode?: string; inputs?: string[] }> = {};
+    const contracts: Record<string, { accepts?: ReturnType<typeof normalizeAccepts>; mode?: string; inputs?: string[]; output?: ReturnType<typeof normalizeOutputShape> }> = {};
     for (const [mode, contract] of Object.entries(value)) {
         const trimmed = String(mode).trim();
         if (!trimmed || !contract || typeof contract !== "object") continue;
-        contracts[trimmed] = { accepts: normalizeAccepts(contract.accepts), mode: contract.mode?.trim() || undefined, inputs: normalizeInputs(contract.inputs) };
+        contracts[trimmed] = { accepts: normalizeAccepts(contract.accepts), mode: contract.mode?.trim() || undefined, inputs: normalizeInputs(contract.inputs), output: normalizeOutputShape(contract.output) };
     }
     return Object.keys(contracts).length ? contracts : undefined;
+}
+
+/**
+ * The shape answer, rebuilt rather than trusted, like every other part of a contract.
+ *
+ * The owner is the only required part. `key` and `pixels` are what makes an owner readable by a client — a square
+ * names the knob it reads, an unasked graph states the shape it falls back to — and a graph that owns its shape
+ * without saying how is still a graph whose shape is not this client's to choose.
+ */
+function normalizeOutputShape(value: { sizedBy?: unknown; key?: unknown; pixels?: unknown } | undefined) {
+    if (!value || typeof value !== "object") return undefined;
+    const sizedBy = typeof value.sizedBy === "string" ? value.sizedBy.trim() : "";
+    if (!sizedBy) return undefined;
+    return { sizedBy, key: typeof value.key === "string" ? value.key.trim() || undefined : undefined, pixels: typeof value.pixels === "string" ? value.pixels.trim() || undefined : undefined };
 }
 
 /** The keys a run may carry, rebuilt rather than trusted, so a stored document cannot smuggle a shape. */

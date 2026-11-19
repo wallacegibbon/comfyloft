@@ -197,6 +197,25 @@ describe("modelsOf", () => {
         expect(modelsOf(workflow({ inputs: [] }))[0].inputs).toBeUndefined();
     });
 
+    it("carries what the graph says sizes its own output, per workflow and per mode", () => {
+        // A card is drawn at a shape before a run answers, and the request states one — both read this answer,
+        // which is why a stale or dropped copy is a card that bands its picture (#359).
+        const models = modelsOf(
+            workflow({
+                id: "image-qwen21",
+                output: { sizedBy: "squareOf", key: "resolution", pixels: "1024x1024" },
+                variantModes: ["t2i", "inpaint"],
+                variantContracts: { t2i: { output: { sizedBy: "ask", pixels: "1024x1024" } }, inpaint: { output: { sizedBy: "source" } } },
+                models: [{ id: "image-qwen21" }],
+            }),
+        );
+        expect(models[0].output).toEqual({ sizedBy: "squareOf", key: "resolution", pixels: "1024x1024" });
+        expect(models[0].contracts?.t2i.output).toEqual({ sizedBy: "ask", pixels: "1024x1024" });
+        expect(models[0].contracts?.inpaint.output).toEqual({ sizedBy: "source", key: undefined, pixels: undefined });
+        // Nothing published is nothing claimed: not "ask", not a square.
+        expect(modelsOf(workflow({ models: [{ id: "image-z-image-turbo" }] }))[0].output).toBeUndefined();
+    });
+
     it("offers the SelfLift toggle only where the workflow declares the knob it writes", () => {
         // The toggle writes `transition_step` (services/api/video.ts), so the declaration is what makes it real:
         // a workflow without the knob would be sent a value nothing reads.
@@ -228,6 +247,14 @@ describe("modelSignature", () => {
     it("changes when a label changes, so an edited registry reaches the picker", () => {
         const before = modelSignature(modelsOf(workflow()));
         const after = modelSignature(modelsOf(workflow({ models: [{ id: "image-z-image-turbo", label: "Renamed" }] })));
+        expect(after).not.toBe(before);
+    });
+
+    it("changes when the graph's answer about its own shape changes", () => {
+        // Re-importing a workflow that sizes itself differently must reach the canvas on the next sweep, or
+        // every card keeps drawing the shape of the graph that was loaded when the page opened (#359).
+        const before = modelSignature(modelsOf(workflow({ output: { sizedBy: "ask", pixels: "1024x1024" }, models: [{ id: "image-z-image-turbo" }] })));
+        const after = modelSignature(modelsOf(workflow({ output: { sizedBy: "source" }, models: [{ id: "image-z-image-turbo" }] })));
         expect(after).not.toBe(before);
     });
 

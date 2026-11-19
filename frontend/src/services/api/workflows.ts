@@ -42,6 +42,22 @@ export type WorkflowAccepts = {
 };
 
 /**
+ * What decides the shape of what a workflow draws, read off the graph by the server (#359).
+ *
+ * A card is drawn at a shape before a run answers, so this is the difference between a card that frames its
+ * picture and one that bands it. Absent means the server read the graph and cannot say: not "square", not
+ * "whatever the client likes" — nothing.
+ */
+export type WorkflowOutputShape = {
+    /** `ask` (the request states it), `squareOf` (one knob sets both sides), `source` (the picture handed to it). */
+    sizedBy?: string;
+    /** For `squareOf`, the parameter that sets the side. */
+    key?: string;
+    /** The shape ("832x1216") the graph draws when the request states none. */
+    pixels?: string;
+};
+
+/**
  * One mode's contract: what it accepts and the mode it runs in. A mode is a different graph, so it may
  * take a different media mix (inpaint wants a source and a mask; t2i wants none).
  */
@@ -50,6 +66,8 @@ type WorkflowContract = {
     mode?: string;
     /** The keys a run of this mode may carry. A variant is a different graph, so they differ. */
     inputs?: string[];
+    /** And a different graph decides its shape differently. */
+    output?: WorkflowOutputShape;
 };
 
 type WorkflowAvailability = {
@@ -109,6 +127,8 @@ export type ServerWorkflow = {
      * them and being answered with `unknown_input`.
      */
     inputs?: string[];
+    /** What decides the shape of what this workflow draws. See `WorkflowOutputShape`. */
+    output?: WorkflowOutputShape;
     /** Per-mode contracts, present only for a workflow with variants. */
     variantContracts?: Record<string, WorkflowContract>;
 };

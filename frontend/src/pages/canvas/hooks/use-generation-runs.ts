@@ -199,10 +199,12 @@ export function useGenerationRuns(deps: GenerationRunDeps) {
                     node.id === nodeId
                         ? {
                               ...node,
-                              // The card takes the shape this run was asked for *now*, before anything is
-                              // drawn: the answer goes into that box and never resizes it, so the card is the
-                              // same size before the press as after the picture lands (#354).
-                              ...cardBoxForRun(node, generationMetadata),
+                              // The card takes the shape this run will draw *now*, before anything is drawn: the
+                              // answer goes into that box and never resizes it, so the card is the same size before
+                              // the press as after the picture lands (#354). The ask is the run's own record, because
+                              // a graph that takes a picture (an inpaint) is sized by that picture and not by the
+                              // `size` this node may still be holding from the model that made it (#359).
+                              ...cardBoxForRun(generationConfig, node, generationMetadata),
                               // A node regenerated in place keeps its name when the box has no words to
                               // name it by: the request was the connected text, and "【Text 1】…" is not a
                               // title.
@@ -313,7 +315,7 @@ export function useGenerationRuns(deps: GenerationRunDeps) {
             };
             // The metadata is the run's to write, not the node's to keep: a `runId` left from an earlier
             // run would make a reload resume the wrong one.
-            setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, ...cardBoxForRun(node, settings), ...(prompt ? { title } : {}), metadata: videoMetadata } : node)));
+            setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, ...cardBoxForRun(generationConfig, node, settings), ...(prompt ? { title } : {}), metadata: videoMetadata } : node)));
             const controller = startGenerationRequest(nodeId, nodeId, nodeId, runController);
             try {
                 await completeVideoNodeTask(nodeId, generationConfig, effectivePrompt, generationContext.referenceImages, controller.signal, {

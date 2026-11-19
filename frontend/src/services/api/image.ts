@@ -6,8 +6,10 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { mediaIdOf } from "@/services/canvas-files";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { IMAGE_ANGLE_WORKFLOW } from "@/lib/canvas/tool-workflows";
+import { planRunShape, type RunAsk } from "@/lib/canvas/run-shape";
 import { imageToDataUrl, type UploadedImage } from "@/services/image-storage";
-import { imageSizePresets } from "@/lib/media-size";
+import type { ImageSizeProblem } from "@/lib/media-size";
+import { CanvasNodeType } from "@/types/canvas";
 import { apiErrorMessage, throwIfCanceled } from "@/services/api/http";
 import { createRun, uploadMedia, waitForRun, type Run, type RunRequest } from "@/services/api/runs";
 import { generatedImage } from "@/lib/canvas/generated-media";
@@ -27,13 +29,6 @@ type RequestOptions = {
     askedBy?: RunRequest["askedBy"];
 };
 
-const DEFAULT_IMAGE_SHORT_SIDE = 1024;
-const IMAGE_SIZE_STEP = 16;
-const IMAGE_MIN_PIXELS = 655360;
-const IMAGE_MAX_PIXELS = 8294400;
-const IMAGE_MAX_EDGE = 3840;
-const IMAGE_MAX_RATIO = 3;
-
 export function localServerRoot(baseUrl: string) {
     const url = String(baseUrl || "")
         .trim()
@@ -52,46 +47,17 @@ function normalizeBackground(background: string | undefined) {
     return background?.trim().toLowerCase() === "transparent" ? "transparent" : undefined;
 }
 
-/** Map a bare ratio such as "1:1" to an explicit pixel dimension like "1024x1024". */
-function resolveSize(ratio: string): string {
-    const parsedRatio = parseImageRatio(ratio);
-    const preset = imageSizePresets["1k"][ratio];
-    if (preset) return preset;
-    const isLandscape = parsedRatio.width >= parsedRatio.height;
-    const longRatio = isLandscape ? parsedRatio.width / parsedRatio.height : parsedRatio.height / parsedRatio.width;
-    const shortSide = DEFAULT_IMAGE_SHORT_SIDE;
-    const longSide = Math.round((shortSide * longRatio) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    const width = isLandscape ? longSide : shortSide;
-    const height = isLandscape ? shortSide : longSide;
-    validateImageSize(width, height);
-    return `${width}x${height}`;
-}
-
-function parseRatioValue(value: string) {
-    const parts = value.split(":");
-    if (parts.length !== 2) throw new Error(apiText("invalidImageSizeFormat"));
-    const w = Number(parts[0]);
-    const h = Number(parts[1]);
-    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) throw new Error(apiText("positiveImageRatio"));
-    return { width: w, height: h };
-}
-
-function parseImageRatio(value: string) {
-    const ratio = parseRatioValue(value);
-    if (Math.max(ratio.width, ratio.height) / Math.min(ratio.width, ratio.height) > IMAGE_MAX_RATIO) throw new Error(apiText("imageRatioLimit"));
-    return ratio;
-}
-
-function parseImageDimensions(value: string) {
-    const match = value.match(/^(\d+)x(\d+)$/i);
-    if (!match) return null;
-    return { width: Number(match[1]), height: Number(match[2]) };
-}
-
-type ImageSizeProblem = "format" | "positive" | "step" | "edge" | "ratio" | "pixels";
-
-const SIZE_PROBLEM_KEYS: Record<ImageSizeProblem, string> = {
+/**
+ * What a stated size that a run would refuse is called in the answer.
+ *
+ * The rule is `planStatedSize`'s — one place decides what a size means and which rule a bad one breaks — and only
+ * the wording is here, so the request, the agent's `set_node` and the panel cannot describe three different rules.
+ * `shapeOnly` is a spelling like "16:9": a shape is not a size, and a value this canvas stores is always a size,
+ * because two readers given only a shape resolve it differently (#359).
+ */
+const SIZE_PROBLEM_KEYS: Record<"format" | "shapeOnly" | ImageSizeProblem, string> = {
     format: "invalidImageSizeFormat",
+    shapeOnly: "invalidImageSizeFormat",
     positive: "positiveImageDimensions",
     step: "imageDimensionStep",
     edge: "imageEdgeLimit",
@@ -100,64 +66,16 @@ const SIZE_PROBLEM_KEYS: Record<ImageSizeProblem, string> = {
 };
 
 /**
- * What a size is, or what is wrong with it — the one decision behind every reader.
+ * The size to send, from the same plan the card was drawn at.
  *
- * `validateImageSize` refuses, `resolveRequestSize` normalises, and the agent's `set_node` asks before
- * it writes a value into a node: three audiences, one answer. The alternative was a second opinion about sizes
- * in the tool, where "1024x1000 is fine because the request aligns it" and "1024x1000 is refused" could both be
- * true in the same build.
- *
- * `kind: "pixels"` is the size a run will get, aligned up to the step the panel's own inputs align to. A ratio
- * is a shape rather than a size — only a run knows what short side the canvas gives it — so it is its own kind
- * and the caller decides whether it can take one.
+ * A run is told a size only when the graph it submits takes one: `planRunShape` reads that from the published
+ * contract, so a Qwen edit is not sent a `size` its graph never reads and a card is never drawn at a shape the
+ * request did not ask for. A size a run would refuse is an error here, in the words of the rule it broke.
  */
-type PlannedImageSize = { kind: "auto" } | { kind: "pixels"; size: string; width: number; height: number } | { kind: "ratio"; ratio: string } | { kind: "invalid"; problem: ImageSizeProblem };
-
-/** What is wrong with these pixel dimensions, or null when a run would take them. */
-function sizeProblem(width: number, height: number): ImageSizeProblem | null {
-    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return "positive";
-    if (width % IMAGE_SIZE_STEP !== 0 || height % IMAGE_SIZE_STEP !== 0) return "step";
-    if (Math.max(width, height) > IMAGE_MAX_EDGE) return "edge";
-    if (Math.max(width, height) / Math.min(width, height) > IMAGE_MAX_RATIO) return "ratio";
-    const pixels = width * height;
-    if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) return "pixels";
-    return null;
-}
-
-export function planImageSize(value: string): PlannedImageSize {
-    const trimmed = String(value ?? "").trim();
-    if (!trimmed || trimmed.toLowerCase() === "auto") return { kind: "auto" };
-    const dimensions = parseImageDimensions(trimmed);
-    if (dimensions) {
-        const aligned = alignImageDimensions(dimensions.width, dimensions.height);
-        const problem = sizeProblem(aligned.width, aligned.height);
-        if (problem) return { kind: "invalid", problem };
-        return { kind: "pixels", size: `${aligned.width}x${aligned.height}`, width: aligned.width, height: aligned.height };
-    }
-    if (trimmed.includes(":")) return { kind: "ratio", ratio: trimmed };
-    return { kind: "invalid", problem: "format" };
-}
-
-function validateImageSize(width: number, height: number) {
-    const problem = sizeProblem(width, height);
-    if (problem) throw new Error(apiText(SIZE_PROBLEM_KEYS[problem]));
-}
-
-function alignImageDimensions(width: number, height: number) {
-    return {
-        width: Math.ceil(width / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP,
-        height: Math.ceil(height / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP,
-    };
-}
-
-function resolveRequestSize(size: string) {
-    const planned = planImageSize(size);
-    if (planned.kind === "auto") return undefined;
-    if (planned.kind === "pixels") return planned.size;
-    // A ratio is the run's to resolve: the canvas gives it its own short side (and refuses one that is
-    // lopsided, on the same numbers as every other size).
-    if (planned.kind === "ratio") return resolveSize(planned.ratio);
-    throw new Error(apiText(SIZE_PROBLEM_KEYS[planned.problem]));
+function requestSize(config: AiConfig, ask: RunAsk) {
+    const plan = planRunShape(config, CanvasNodeType.Image, ask);
+    if (plan.problem) throw new Error(apiText(SIZE_PROBLEM_KEYS[plan.problem]));
+    return plan.size;
 }
 
 function withSystemPrompt(config: AiConfig, prompt: string) {
@@ -249,11 +167,13 @@ async function mediaId(config: AiConfig, reference: ReferenceImage, filename: st
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
-    const requestSize = resolveRequestSize(config.size);
-    const background = normalizeBackground(config.background);
     // Resolved against the model that will run, not taken on trust: a stored mode can outlive the model it was
     // chosen for, and this is the line that decides the roles and the outpaint numbers (#267).
     const imageMode = imageModeFor(requestConfig, requestConfig.model);
+    // The shape this run will draw, and whether the graph is told one at all — the same plan the card was drawn
+    // at, so what a user sees on the canvas and what the graph is asked for cannot come apart (#359).
+    const size = requestSize(requestConfig, { size: requestConfig.size, model: requestConfig.model, imageMode, params: requestConfig.params });
+    const background = normalizeBackground(config.background);
     // Only the knobs this model takes travel: one left over from another model is a 400 for a field nobody
     // typed (#274). The layout below is added after, because it is this client's own word rather than a knob.
     const requestParams = acceptedInputs(requestConfig, requestConfig.model, options?.params ?? requestConfig.params, imageMode) || {};
@@ -271,7 +191,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         config: requestConfig,
         prompt: finalPrompt,
         references: [],
-        size: requestSize,
+        size,
         background,
         imageMode,
         params: requestParams,
@@ -282,9 +202,11 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const requestPrompt = buildImageReferencePromptText(prompt, references);
-    const requestSize = resolveRequestSize(config.size);
     const background = normalizeBackground(config.background);
     const imageMode = String(config.imageMode || requestConfig.imageMode || "").trim();
+    // The same plan as the card: an edit that takes a picture is not told a size, because the graph keeps the
+    // picture's shape and says so (#359).
+    const size = requestSize(requestConfig, { size: requestConfig.size, model: requestConfig.model, imageMode, params: requestConfig.params });
     const requestParams = acceptedInputs(requestConfig, requestConfig.model, options?.params ?? requestConfig.params, imageMode) || {};
     if (config.imageMode === "outpaint" && config.outpaint) {
         const { left, top, right, bottom, width, height } = config.outpaint;
@@ -302,7 +224,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         config: requestConfig,
         prompt: finalPrompt,
         references,
-        size: requestSize,
+        size,
         background,
         imageMode,
         params: requestParams,

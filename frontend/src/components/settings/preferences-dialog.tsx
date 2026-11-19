@@ -10,7 +10,7 @@ import { imageAspectOptions } from "@/components/image-settings-panel";
 import { videoResolutionOptions } from "@/components/video-settings-panel";
 import { AgentModelsSection } from "@/components/settings/agent-models-section";
 import { SpeechProfilesSection } from "@/components/settings/speech-profiles-section";
-import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
+import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution, sizeForTier } from "@/lib/media-size";
 import { useConfigStore, type ModelCapability } from "@/stores/use-config-store";
 
 /**
@@ -42,7 +42,9 @@ export function PreferencesDialog() {
     const setOpen = useConfigStore((state) => state.setPreferencesOpen);
     const config = useConfigStore((state) => state.config);
     const updateConfig = useConfigStore((state) => state.updateConfig);
-    const imageResolutionOptions = mediaScaleOptions.map((value) => ({ value, label: value === "auto" ? t("settingsPanels.common.auto") : value.toUpperCase() }));
+    // "auto" is not a resolution, it is the absence of one: it is offered as its own choice and writes no size, so
+    // the graph's own answer is what a first run draws and what its card shows (#359).
+    const imageResolutionOptions = [{ value: "auto", label: t("settingsPanels.common.auto") }, ...mediaScaleOptions.map((value) => ({ value, label: value.toUpperCase() }))];
 
     return (
         <Dialog
@@ -72,7 +74,7 @@ export function PreferencesDialog() {
             <div className="mb-2 text-sm font-semibold">{t("config.preferences.generation")}</div>
             <div className="grid gap-4 md:grid-cols-4">
                 <Field label={t("config.preferences.imageResolution")} className="mb-4">
-                    <Select value={inferMediaScale(config.size)} options={imageResolutionOptions} onChange={(scale) => updateConfig("size", computeMediaSize(scale, inferMediaRatio(config.size)))} />
+                    <Select value={inferMediaScale(config.size)} options={imageResolutionOptions} onChange={(scale) => updateConfig("size", scale === "auto" ? "auto" : sizeForTier(scale, config.size))} />
                 </Field>
                 <Field label={t("config.preferences.imageAspectRatio")} className="mb-4">
                     <Select value={inferMediaRatio(config.size)} options={imageAspectOptions} onChange={(ratio) => updateConfig("size", computeMediaSize(inferMediaScale(config.size), ratio))} />

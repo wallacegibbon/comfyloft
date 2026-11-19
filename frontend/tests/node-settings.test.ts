@@ -148,7 +148,7 @@ describe("a film's and a sound's settings", () => {
         expect(!long.ok && long.reason).toContain("4 to 30 s");
     });
 
-    // A film's pixels are derived from its tier and its shape at submit (`normalizeVideoSize`), so a stated
+    // A film's pixels are derived from its tier and its shape at submit (`planRunShape`), so a stated
     // size that the tier would not make is a number that would be quietly replaced. Refused, with the number
     // that would be made — and `quality` is the setting that takes the fix.
     test("a film's size is the tier's numbers for its shape, and a disagreement is refused with the size it makes", () => {

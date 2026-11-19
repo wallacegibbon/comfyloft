@@ -12247,3 +12247,131 @@ press; the workflow-id test is gone, and with it `workflowId`),
 none), `frontend/scripts/check-i18n.cjs`, `frontend/src/i18n/locales/{en-US,zh-CN}.ts`
 (`canvas.runtime.outpaintSourceNeeded`). The panel was `modelOptionName`'s last caller outside the store, so the
 store no longer exports it — an export nobody calls is the same kind of leftover as a field nobody reads.
+
+## 359. One question, one answer: what a run will draw
+
+**Decision** "What shape will this produce?" has one owner — the graph that runs — one published answer, and one
+reader of that answer.
+
+- The server derives it. `internal/workflow/outputshape.go` walks a graph backwards from the node that writes the
+  file out and reports `output: {sizedBy, key?, pixels?}` on every image and video contract
+  (`PublicEntry.Output`, `VariantContract.Output`). Three owners, because three exist in the shipped graphs:
+  **`ask`** — a `size.width`/`size.height` binding, the canvas an `outputSize` rewrites, or a pair of request
+  parameters writing a node's width and height (an outpaint's own canvas, for which no `pixels` are claimed);
+  **`squareOf`** — one numeric knob sizes the latent on its own (`resolution` on a text encoder whose output *is*
+  the latent); **`source`** — the picture handed in decides (an upscaler, an interpolator, an inpaint).
+  `pixels` is what the graph draws when the request states nothing. A graph this cannot read claims nothing, which
+  is the three-state reading every other contract field uses (#348).
+- The client asks it once. `planRunShape` (`frontend/src/lib/canvas/run-shape.ts`) answers for the card and the
+  request together — `{shape, size, problem?}` — and both writers of a box (`nodeSizeForRun`, `cardBoxForRun`) and
+  both request builders (`requestSize` in `services/api/image.ts`, the size in `services/api/video.ts`) call it.
+  A graph that publishes nothing *and* was handed a picture is answered by that picture: the caller knows what the
+  run was given.
+- `size`'s value space is `auto | "WxH"`. A ratio is a spelling a caller may choose, never a value the canvas
+  stores: the settings panels resolve shape × tier into pixels when the user picks one (`pixelsForRatio`), and a
+  control that offers only half of a size answers for the other half — choosing a tier keeps the shape the size
+  states and states a square when none is (`sizeForTier`), which the preferences' default control had been getting
+  by reading `auto` back as its own answer and writing `auto`, a control that did nothing. A value that is neither
+  is refused in words (`apiErrors.invalidImageSizeFormat`) by the card, the request and the agent's `set_node`
+  alike. The
+  `auto` entry of the image scale row is gone — `auto` is a size, not a size of a certain bigness — and
+  `defaultConfig.size` is `auto`, which is what the graphs mean by "I am not being told".
+- One fitter turns a shape into a box: `fitBox(shape, limits, floor)` in `canvas-node-size.ts`, with
+  `NODE_MIN_SIZE` as the one floor (#270) for cards and no floor for a preview drawn inside one; a shape outside
+  `IMAGE_MAX_RATIO` is material rather than an ask and stays inside the limits. A card derived from an existing
+  card is fitted inside *that* card's box (a crop, a split piece, a mask or upscale child, a pasted picture, an
+  interpolation frame); only a card that is a run's own ask uses the type table's.
+- Deleted: `fitNodeSize`, `nodeSizeFromShape`, `requestedOutputShape`, `RunShapeSettings`, `resolveSize`,
+  `parseImageRatio`, `parseImageDimensions`, `sizeProblem`, `validateImageSize`, `planImageSize`,
+  `resolveRequestSize`, `normalizeVideoSize` — two or three implementations of "what is this size" and two of
+  "fit it into a box", with the pixel limits copied a second time into `services/api/image.ts`. The node's
+  `aspectRatio` field goes too: nothing wrote it after #354, and a record nothing reads is not a record (#356).
+
+**Why** "卡片的长宽比跟它里面的内容（图片）是不是没有完全保持一致?" — yes, in four ways at once, and the ways
+were all the same question asked twice.
+
+- The shipped default. `size` was `1:1` and the card was a 240×240 square; the Z-Image graph draws the latent it
+  carries — **832×1216** — so every first card was a portrait inside a square.
+- `auto`. The card resolved it to `1k`/`1:1` through the settings panel's own reader (`readMediaDimensions`) and
+  drew a square; the request resolved it to *send nothing*. #306 measured why — the graph takes its latent from
+  its text encoder — and that measurement was about one graph, while the code made it a rule for all of them.
+- A stored ratio. `size: "2:1"` (an agent's `set_node` wrote it, or the preferences' `auto` scale pill left it
+  behind) drew a card at **1536×864** — the nearest ratio the panel offers, at the tier inferred from a number
+  that states no tier — while the run asked for **2048×1024**, computed from a short side the run invented. Both
+  readings were reasonable; they were not the same one, and neither was the graph's.
+- A graph that does not read `size` at all: an angle re-render draws the `resolution²` square its encoder builds,
+  an upscale keeps the picture it is given, an inpaint keeps the source. Their cards were drawn from the ask that
+  does not apply to them.
+
+The box is decided *before* the run (#354), so a wrong shape is on screen and empty for the whole generation, and
+the mismatch shows as bands inside the frame. And it is not cosmetic downstream: the next run is asked for a shape
+nothing on screen matches.
+
+**What this makes visible** A graph that will not follow an ask now says so where a client can read it, instead of
+being assumed to. A card of a `source` graph is drawn at the picture it was handed, a card of a `squareOf` graph
+at that square, and a card of a graph nobody can read keeps the box it has rather than inventing one — the same
+three states as #348's "does this workflow read a picture", and for the same reason: silence is not a value.
+
+**Rejected** Declaring the shape in `registry.json`. It is derivable from the graph the run actually executes, and
+the registry already states the half of it that is a fact about the request (which node the size is written into)
+— a second copy in the file that ships graphs is the drift #302 and #306 kept deleting, and it would have been
+wrong on the first mode that rewires a latent. Also rejected: teaching the client per-workflow tables (`auto`
+means 832×1216 for one graph and 1024² for another); keeping ratio values and resolving them at request time,
+which is exactly the two-readers failure; letting the card be drawn at the answer's shape, which #354 refuses and
+which would hide the disagreement the report is about; and, for the same reason, refusing `auto` — the graphs
+*do* have an unasked shape, and saying what it is beats forbidding the question.
+
+**Cost** An old canvas holding `2:1` now says so out loud instead of drawing some other picture; the user picks a
+shape again, and the pills write pixels. A card whose graph cannot be read keeps a box that may not match its
+answer — the honest case, and the one that stops being honest the day the walk learns that graph's node classes.
+The walk's tables are real code to keep: a re-imported graph that sizes itself a new way answers nothing until
+`shapeWalk`/`shapeStops` know it, and `TestShippedGraphsSayWhatSizesThem` fails that day instead of showing
+bands a week later. Nothing migrates: an empty card's box is derived, and a filled one is its picture's shape.
+
+**Tested** `internal/workflow/outputshape_test.go` (new): four hand-written graphs, one per answer, including a
+graph whose walk runs into a node it does not know (it claims nothing); and the shipped registry — every image and
+video entry and every mode, 16 answers in all, each pinned to the answer its graph is wired to today, with the
+square answer checked again for whether a client could act on it. `frontend/tests/node-card-size.test.ts`
+rewritten (30):
+the shape answer per graph kind, the card and the request as the same number for every size either can state, a
+settled box that the same ask does not move again, a step card drawn at the picture it was handed rather than its
+parent's box, pasted material fitted inside the card it was dropped on, and `applyGeneratedImage`/
+`applyGeneratedVideo` still writing nothing to the box. `frontend/tests/api-image-runs.test.ts` (+5): a stated size
+and its card agree; a `squareOf` graph is sent no size and its card follows the knob; a `source` graph is sent no
+size; `auto` sends no size and the card is the graph's own pixels; `"2:1"` and `1600x480` are refused with the
+i18n keys. `frontend/tests/server-models.test.ts` (+2): the answer is carried per workflow and per mode, and it is
+part of what a settings change is noticed by. `npx vitest run` (695), `go test ./internal/...`,
+`npx tsc --noEmit`, `npm run check` (i18n 840/807 — one copy changed, one key deleted as its message stopped
+being reachable, prettier, exports, decisions, comment names), `npm run build`.
+`frontend/tests/media-size-choices.test.ts` (new, 7) pins what the controls write, since that is where the value
+space is decided: no combination of a tier and a shape writes a bare ratio, a shape the pills do not offer is made
+at the tier's own short side, a shape a tier cannot hold writes no size rather than one the run would refuse, and
+choosing a tier keeps the shape the size states. What the wire carries was read off a running server rather
+than trusted from the struct: `/api/workflows` answers `ask 832x1216` for Z-Image, `squareOf resolution
+1024x1024` for the family and the angle graph, `source` for inpaint/upscale/RIFE, and `ask` with no pixels for
+outpaint. The cards were then watched being drawn: a fresh film card stands 419×236, the 16:9 the 720p tier will
+send, and dragging its handle moved it to 379×213 without touching the shape; a fresh picture card for the
+default graph is 240×240 because that graph answers `1024x1024`, with the panel's W and H greyed at the graph's
+own numbers rather than at a square invented here; choosing 9:16 made the card 220×391 — the floor width, the
+height grown from it — and the panel 864×1536, the same shape; the 2k tier kept that shape (1152×2048, the card
+still portrait); `Auto` returned the card to the graph's square and left only the `Auto` pill lit. Not watched:
+a Z-Image card standing portrait — that instance's ComfyUI has no Z-Image weights, so its graph was never
+selected — and an angle child drawn square inside its parent's box.
+
+**Where** `internal/workflow/outputshape.go` (new), `internal/workflow/render.go` (`Output` on both contract
+shapes), `frontend/src/lib/canvas/run-shape.ts` (new: `planRunShape`, `runAskOf`),
+`frontend/src/lib/canvas/canvas-node-size.ts` (`fitBox`, `nodeShape`, `nodeSizeForRun`, `cardBoxForRun`,
+`IMAGE_CARD_MAX_SIZE`, `NODE_MIN_SIZE`), `frontend/src/lib/media-size.ts` (`planStatedSize`, `pixelDimensions`,
+`videoPixelsForAsk`, `TIER_SHORT_SIDE`; `computeMediaSize` can no longer return a bare ratio),
+`frontend/src/services/api/{image,video}.ts` (`requestSize`, and the video's size from the same plan),
+`frontend/src/services/api/workflows.ts`, `frontend/src/lib/server-models.ts` and
+`frontend/src/stores/use-config-store.ts` (the `output` field on `ServerWorkflow`, `WorkflowContract`,
+`ChannelModel`, `ModelContract`),
+`frontend/src/components/{image-settings-panel,settings/preferences-dialog}.tsx` (shape × tier writes pixels,
+the scale row lost its `auto`),
+`frontend/src/lib/canvas/{canvas-node-factory,node-settings,node-settings-memory,types/canvas}.ts`,
+`frontend/src/pages/canvas/project.tsx` and its canvas hooks (`use-image-editors`, `use-video-editors`,
+`use-content-ingress`, `use-generation-runs`),
+`frontend/src/i18n/locales/{en-US,zh-CN}.ts` (`positiveImageRatio` gone — no ratio is parsed at request time
+any more). Corrects #306's "a square for a picture", and completes #354: the box is the ask's shape, and now
+there is one place that says what the ask's shape is.

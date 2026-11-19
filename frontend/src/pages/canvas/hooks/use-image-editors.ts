@@ -7,7 +7,8 @@ import { requestEdit, requestGeneration, requestImageAngle } from "@/services/ap
 import { uploadImage } from "@/services/image-storage";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { cropDataUrl, splitDataUrl } from "@/lib/canvas/canvas-image-data";
-import { nodeSizeFromShape } from "@/lib/canvas/canvas-node-size";
+import { fitBox, nodeShape } from "@/lib/canvas/canvas-node-size";
+import { planRunShape, runAskOf } from "@/lib/canvas/run-shape";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import type { CanvasImageCropRect } from "@/components/canvas/canvas-node-crop-dialog";
 import type { CanvasImageMaskEditPayload } from "@/components/canvas/canvas-node-mask-edit-dialog";
@@ -43,14 +44,16 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const cropped = await cropDataUrl(node.metadata.content, crop).catch(() => "");
             if (!cropped) return toast.error(t("common.imageReadFailed"));
             const image = await uploadImage(cropped);
-            const width = Math.min(node.width, Math.max(220, image.width));
+            // A crop is a picture of its own, so its card is drawn at its own shape — inside the box of the card it
+            // came from, which is the rule every derived card follows (#359).
+            const size = fitBox({ width: image.width, height: image.height }, { width: node.width, height: node.height });
             const childId = nanoid();
             const child: CanvasNodeData = {
                 id: childId,
                 type: CanvasNodeType.Image,
                 position: { x: node.position.x + node.width + 96, y: node.position.y },
-                width,
-                height: width * (image.height / image.width),
+                width: size.width,
+                height: size.height,
                 // No prompt: a crop answered nothing. Copying the source's words here made the node look
                 // like a run that could be asked again, which a browser-side crop can never be (#297).
                 metadata: imageMetadata(image),
@@ -70,26 +73,29 @@ export function useImageEditors(deps: NodeEditorDeps) {
             closeNodeTool();
             const pieces = await splitDataUrl(node.metadata.content, params).catch(() => []);
             if (!pieces.length) return toast.error(t("common.imageReadFailed"));
+            const uploaded = await Promise.all(pieces.map((piece) => uploadImage(piece.dataUrl)));
+            // An even split makes every piece the same shape, so one box is the grid's cell: that shape, inside the
+            // cell the source card's grid implies. Deriving it from the pieces rather than from the source card's
+            // box is what keeps a cell the shape of the picture inside it (#359).
+            const cell = fitBox({ width: uploaded[0]!.width, height: uploaded[0]!.height }, { width: node.width / params.columns, height: node.height / params.rows });
             const gap = 16;
-            const cellWidth = node.width / params.columns;
-            const cellHeight = node.height / params.rows;
+            const cellWidth = cell.width;
+            const cellHeight = cell.height;
             const startX = node.position.x + node.width + 96;
             const startY = node.position.y;
-            const childNodes = await Promise.all(
-                pieces.map(async (piece) => {
-                    const image = await uploadImage(piece.dataUrl);
-                    const id = nanoid();
-                    return {
-                        id,
-                        type: CanvasNodeType.Image,
-                        position: { x: startX + piece.column * (cellWidth + gap), y: startY + piece.row * (cellHeight + gap) },
-                        width: cellWidth,
-                        height: cellHeight,
-                        // Likewise no prompt: a piece of a picture was not generated either (#297).
-                        metadata: imageMetadata(image),
-                    } satisfies CanvasNodeData;
-                }),
-            );
+            const childNodes = uploaded.map((image, index) => {
+                const piece = pieces[index]!;
+                const id = nanoid();
+                return {
+                    id,
+                    type: CanvasNodeType.Image,
+                    position: { x: startX + piece.column * (cellWidth + gap), y: startY + piece.row * (cellHeight + gap) },
+                    width: cellWidth,
+                    height: cellHeight,
+                    // Likewise no prompt: a piece of a picture was not generated either (#297).
+                    metadata: imageMetadata(image),
+                } satisfies CanvasNodeData;
+            });
             setNodes((prev) => [...prev, ...childNodes]);
             setConnections((prev) => [...prev, ...childNodes.map((child) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: child.id }))]);
             setSelectedNodeIds(new Set(childNodes.map((child) => child.id)));
@@ -142,22 +148,25 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const maskBinding = sentMask.storageKey ? { mask: { storageKey: sentMask.storageKey, mimeType: sentMask.type } } : {};
             const generationMetadata = buildImageGenerationMetadata(generationConfig, references);
             const childMetadata = { prompt, status: NODE_STATUS_LOADING, ...generationMetadata };
+            // Both cards are the source picture's shape, and the graph says so: an inpaint is handed a picture and
+            // keeps its shape, so neither is drawn at the box the source card happens to have — a drag may have
+            // changed that (#359). The mask is the same canvas with marks on it, so it matches the result.
+            const childBox = fitBox(planRunShape(generationConfig, CanvasNodeType.Image, runAskOf(generationMetadata, generationConfig), nodeShape(node)).shape || nodeShape(node), { width: node.width, height: node.height });
+            const maskBox = fitBox(nodeShape(node), { width: node.width, height: node.height });
             setNodes((prev) => [
                 ...prev,
                 {
                     id: maskNodeId,
                     type: CanvasNodeType.Image,
                     position: { x: node.position.x, y: node.position.y + node.height + 96 },
-                    width: node.width,
-                    height: node.height,
+                    ...maskBox,
                     metadata: { ...imageMetadata(drawnMask), ...maskBinding },
                 },
                 {
                     id: childId,
                     type: CanvasNodeType.Image,
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
-                    width: node.width,
-                    height: node.height,
+                    ...childBox,
                     metadata: childMetadata,
                 },
             ]);
@@ -216,7 +225,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
             // The outpaint dialog states the canvas it asked for, so the card is drawn at that shape now —
             // inside the source card's box, as the result used to be fitted into it after the run. Waiting for
             // the run to say it would resize a card that was already showing itself at the right shape (#354).
-            const askedBox = nodeSizeFromShape({ width: payload.width, height: payload.height }, node.width, node.height);
+            const askedBox = fitBox({ width: payload.width, height: payload.height }, { width: node.width, height: node.height });
             setNodes((prev) => [
                 ...prev,
                 {
@@ -268,7 +277,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
             const generationMetadata = buildImageGenerationMetadata(generationConfig, []);
             // A layout carries the canvas it was drawn on, so the card is drawn at that shape before the run
             // rather than resized to it afterwards (#354).
-            const askedBox = nodeSizeFromShape({ width: payload.width || 1024, height: payload.height || 1024 }, node.width, node.height);
+            const askedBox = fitBox({ width: payload.width || 1024, height: payload.height || 1024 }, { width: node.width, height: node.height });
             setNodes((prev) => [
                 ...prev,
                 {
@@ -305,22 +314,24 @@ export function useImageEditors(deps: NodeEditorDeps) {
         (node: CanvasNodeData) => {
             if (!node.metadata?.content) return;
             const childId = nanoid();
+            // The workflow, not the canvas's model: an upscale is `image-esrgan-upscale` whatever the node being
+            // upscaled was made with (#293). No params and no prompt — the model is the workflow's default until
+            // someone chooses another, and an upscaler is asked nothing — and nothing runs until the node's own send
+            // button is pressed (#301).
+            const step = buildStepNodeMetadata(effectiveConfig, IMAGE_UPSCALE_WORKFLOW);
+            // More pixels in the same picture. The graph says it keeps the shape of the picture it was handed, so the
+            // card is drawn at *that* shape inside the source card's box — not at the box, which a drag may have
+            // changed out of step with the picture (#359).
+            const shape = planRunShape(effectiveConfig, CanvasNodeType.Image, { ...runAskOf(node.metadata, effectiveConfig), model: step.model }, nodeShape(node)).shape || nodeShape(node);
+            const size = fitBox(shape, { width: node.width, height: node.height });
             setNodes((prev) => [
                 ...prev,
                 {
                     id: childId,
                     type: CanvasNodeType.Image,
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
-                    // An upscaler is handed a picture, not a size: its answer is the same picture with more
-                    // pixels in it, so the card is drawn at the source card's shape and the run only fills it
-                    // (#354, #293).
-                    width: node.width,
-                    height: node.height,
-                    // The workflow, not the canvas's model: an upscale is `image-esrgan-upscale` whatever the
-                    // node being upscaled was made with (#293). No params and no prompt — the model is the
-                    // workflow's default until someone chooses another, and an upscaler is asked nothing —
-                    // and nothing runs until the node's own send button is pressed (#301).
-                    metadata: { ...buildStepNodeMetadata(effectiveConfig, IMAGE_UPSCALE_WORKFLOW), status: NODE_STATUS_IDLE },
+                    ...size,
+                    metadata: { ...step, status: NODE_STATUS_IDLE },
                 },
             ]);
             setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
@@ -359,6 +370,11 @@ export function useImageEditors(deps: NodeEditorDeps) {
             };
             closeNodeTool();
             setRunningNodeId(childId);
+            // This graph draws its own square: `image-qwen21-angle` sizes its output by the resolution its
+            // text-encoder node carries, so the card is drawn at that square. Copying the source card's box made a
+            // landscape source's re-render come back with bands down the sides (#359).
+            const shape = planRunShape(generationConfig, CanvasNodeType.Image, runAskOf(generationMetadata, generationConfig), nodeShape(node)).shape || nodeShape(node);
+            const size = fitBox(shape, { width: node.width, height: node.height });
             setNodes((prev) => [
                 ...prev,
                 {
@@ -366,10 +382,7 @@ export function useImageEditors(deps: NodeEditorDeps) {
                     type: CanvasNodeType.Image,
                     title,
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
-                    // The re-render is of this picture, at this picture's shape: a step is given one, not a
-                    // size, so the card is drawn at the source card's box and the run only fills it (#354).
-                    width: node.width,
-                    height: node.height,
+                    ...size,
                     metadata: { prompt, status: NODE_STATUS_LOADING, ...generationMetadata },
                 },
             ]);
