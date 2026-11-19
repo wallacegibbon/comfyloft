@@ -1,7 +1,10 @@
 import { describe, expect, test } from "vitest";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 import { getNodeSpec } from "../src/constant/canvas";
-import { cardBoxForRun, fitBox, NODE_MIN_SIZE, nodeShape, nodeSizeForRun } from "../src/lib/canvas/canvas-node-size";
+import { cardBoxForRun, fitBox, IMAGE_CARD_MAX_SIZE, NODE_MIN_SIZE, nodeShape, nodeSizeForRun } from "../src/lib/canvas/canvas-node-size";
 import { applyGeneratedImage, applyNodeConfigPatch, createCanvasNode } from "../src/lib/canvas/canvas-node-factory";
 import { applyGeneratedVideo } from "../src/lib/canvas/canvas-generated-video";
 import { planRunShape, type MediaShape } from "../src/lib/canvas/run-shape";
@@ -41,6 +44,18 @@ const graphDrawsItsOwnSquare = { name: "image-qwen", output: { sizedBy: "squareO
 const graphKeepsItsSource = { name: "image-upscale", output: { sizedBy: "source" } };
 const graphStatesItsOwnCanvas = { name: "image-outpaint", output: { sizedBy: "ask" } };
 const graphSaysNothing = { name: "image-unknown" };
+
+/**
+ * The band a picture is left with inside a card: zero is the only answer that means "it fills the card".
+ *
+ * A card's box *is* the rectangle its picture is painted in — the frame is drawn outside it (#360) — so this is
+ * the arithmetic of what the user sees, and asserting the box's ratio was not the same thing: a 4.9px band on each
+ * side of a 640×186.6 card passed every ratio assertion written against that box.
+ */
+function bandsOf(box: MediaShape, shape: MediaShape) {
+    const scale = Math.min(box.width / shape.width, box.height / shape.height);
+    return { left: (box.width - shape.width * scale) / 2, top: (box.height - shape.height * scale) / 2 };
+}
 
 /** A box a run actually settled the card at. Every case using this states a shape, so `{}` — "nothing to change" —
  *  is a failure worth naming before the numbers are taken apart. */
@@ -129,7 +144,8 @@ describe("the shape a run will draw", () => {
         for (const size of ["1024x1024", "1536x864", "864x1536", "2048x1152", "1024x768"]) {
             const plan = planRunShape(config, CanvasNodeType.Image, { model: "image-zit", size });
             const box = nodeSizeForRun(config, emptyCard(CanvasNodeType.Image), { model: "image-zit", size });
-            expect(box.width / box.height).toBeCloseTo(plan.shape!.width / plan.shape!.height, 4);
+            expect(box.width / box.height).toBeCloseTo(plan.shape!.width / plan.shape!.height, 6);
+            expect(bandsOf(box, plan.shape!)).toEqual({ left: expect.closeTo(0, 6), top: expect.closeTo(0, 6) });
             expect(plan.size).toBe(size);
         }
     });
@@ -146,11 +162,11 @@ describe("the box an empty card is drawn at", () => {
     test("a ratio the panel offers is kept, not bent to the card", () => {
         const config = configFor([graphSizesByAsk]);
         const wide = nodeSizeForRun(config, emptyCard(CanvasNodeType.Image), { model: "image-zit", size: "1536x864" });
-        expect(wide.width / wide.height).toBeCloseTo(16 / 9, 4);
+        expect(wide.width / wide.height).toBeCloseTo(16 / 9, 6);
         expect(wide.width).toBe(IMAGE_SPEC.width);
 
         const tall = nodeSizeForRun(config, emptyCard(CanvasNodeType.Image), { model: "image-zit", size: "864x1536" });
-        expect(tall.width / tall.height).toBeCloseTo(9 / 16, 4);
+        expect(tall.width / tall.height).toBeCloseTo(9 / 16, 6);
         // A tall shape fitted into a wide card would come out narrower than any card the canvas will hold
         // (#270 states that floor to the agent), so the pair grows instead.
         expect(tall.width).toBeGreaterThanOrEqual(NODE_MIN_SIZE.width);
@@ -160,7 +176,8 @@ describe("the box an empty card is drawn at", () => {
     test("the node's own setting is asked first, the canvas's next", () => {
         const config = configFor([graphSizesByAsk], "1024x1024");
         const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { size: "1536x864" });
-        expect(nodeSizeForRun(config, card).width / nodeSizeForRun(config, card).height).toBeCloseTo(16 / 9, 4);
+        const asked = nodeSizeForRun(config, card);
+        expect(asked.width / asked.height).toBeCloseTo(16 / 9, 6);
         // With nothing on the node, the canvas's setting is the ask.
         expect(nodeSizeForRun(config, emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { model: "image-zit" }))).toEqual({ width: IMAGE_SPEC.height, height: IMAGE_SPEC.height });
     });
@@ -168,9 +185,9 @@ describe("the box an empty card is drawn at", () => {
     test("a film's card holds the shape its run will be told, and the tier does not move it", () => {
         const config = configFor([{ name: "video-h3", capability: "video", output: { sizedBy: "ask", pixels: "1344x768" } }]);
         const automatic = nodeSizeForRun(config, emptyCard(CanvasNodeType.Video), { model: "video-h3", size: "auto", vquality: "720" });
-        expect(automatic.width / automatic.height).toBeCloseTo(16 / 9, 4);
+        expect(automatic.width / automatic.height).toBeCloseTo(16 / 9, 6);
         const square = nodeSizeForRun(config, emptyCard(CanvasNodeType.Video), { model: "video-h3", size: "1024x1024", vquality: "720" });
-        expect(square.width).toBeCloseTo(square.height, 4);
+        expect(square.width).toBeCloseTo(square.height, 6);
         // A tier changes how many pixels the clip is rendered at, not what shape it is.
         expect(nodeSizeForRun(config, emptyCard(CanvasNodeType.Video), { model: "video-h3", size: "1280x720", vquality: "720" })).toEqual(nodeSizeForRun(config, emptyCard(CanvasNodeType.Video), { model: "video-h3", size: "1920x1080", vquality: "1080" }));
     });
@@ -186,15 +203,34 @@ describe("the box an empty card is drawn at", () => {
 
 describe("the box a shape is drawn at, once", () => {
     test("one function, for every writer of a card's box: the shape, inside the box, never under the floor", () => {
-        expect(fitBox({ width: 1920, height: 1080 }, { width: 640, height: 640 })).toEqual({ width: 640, height: 360 });
+        // A wide shape into a square card: the card lands on the limit and the shape is what fits *inside* it.
+        const wide = fitBox({ width: 1920, height: 1080 }, { width: 640, height: 640 });
+        expect(wide.width).toBe(640);
+        expect(wide.width / wide.height).toBeCloseTo(16 / 9, 6);
         // The floor grows the pair rather than bending the shape (#270).
         const tall = fitBox({ width: 864, height: 1536 }, { width: 340, height: 240 });
-        expect(tall.width / tall.height).toBeCloseTo(864 / 1536, 4);
+        expect(tall.width / tall.height).toBeCloseTo(864 / 1536, 6);
         expect(tall.width).toBeGreaterThanOrEqual(NODE_MIN_SIZE.width);
+        expect(tall.height).toBeGreaterThanOrEqual(NODE_MIN_SIZE.height);
         // An extreme shape keeps its shape instead of growing into an impossible card.
         const strip = fitBox({ width: 4000, height: 200 }, { width: 640, height: 640 });
         expect(strip.width).toBe(640);
-        expect(strip.width / strip.height).toBeCloseTo(20, 4);
+        expect(strip.width / strip.height).toBeCloseTo(20, 6);
+    });
+
+    test("the frame is not a band: a card holding a picture leaves none (#360)", () => {
+        // The real numbers from the report: a 487×142 picture in a card of that same ratio, and a 4.9px dark band
+        // down each side. The card's box was the picture's rect and the picture was painted inside the border that
+        // had been cut out of it, so the two rectangles were 4px apart — and nothing written against the box could
+        // see it. A square hides the difference, which is why the square graphs never showed the seam.
+        const source = { width: 487, height: 142 };
+        const card = fitBox(source, IMAGE_CARD_MAX_SIZE);
+        expect(card.width).toBeLessThanOrEqual(IMAGE_CARD_MAX_SIZE.width);
+        expect(bandsOf(card, source)).toEqual({ left: expect.closeTo(0, 6), top: expect.closeTo(0, 6) });
+        // A card the fit settled on the floor answers its shape the same way.
+        expect(bandsOf(fitBox({ width: 3, height: 2 }, { width: 340, height: 240 }), { width: 3, height: 2 })).toEqual({ left: expect.closeTo(0, 6), top: expect.closeTo(0, 6) });
+        // A square never had the problem, and still does not.
+        expect(bandsOf(fitBox({ width: 1024, height: 1024 }, { width: 340, height: 240 }), { width: 1024, height: 1024 })).toEqual({ left: expect.closeTo(0, 6), top: expect.closeTo(0, 6) });
     });
 
     test("the shape a card holds is its picture's, not the box it happens to have", () => {
@@ -215,13 +251,15 @@ describe("a card created for a run carries that box", () => {
     test("a new card with no size stated is the shape the graph draws unasked", () => {
         const config = configFor([graphSizesByAsk]);
         const node = createCanvasNode(config, CanvasNodeType.Image, { x: 500, y: 400 }, { model: "image-zit" });
-        expect(node.width / node.height).toBeCloseTo(832 / 1216, 4);
+        const painted = { width: node.width, height: node.height };
+        expect(painted.width / painted.height).toBeCloseTo(832 / 1216, 6);
     });
 
     test("a new film card is the shape its run will render", () => {
         const config = configFor([{ name: "video-h3", capability: "video", output: { sizedBy: "ask", pixels: "1344x768" } }], "9:16");
         const node = createCanvasNode(config, CanvasNodeType.Video, { x: 500, y: 400 }, { model: "video-h3", vquality: "720" });
-        expect(node.width / node.height).toBeCloseTo(9 / 16, 4);
+        const painted = { width: node.width, height: node.height };
+        expect(painted.width / painted.height).toBeCloseTo(9 / 16, 6);
         expect(node.width).toBeGreaterThanOrEqual(NODE_MIN_SIZE.width);
     });
 
@@ -265,7 +303,8 @@ describe("a settings change moves an empty card and never a filled one", () => {
         const config = configFor([graphSizesByAsk]);
         const card = emptyCard(CanvasNodeType.Image, { width: 300, height: 200 }, { model: "image-zit" });
         const next = applyNodeConfigPatch(config, card, { size: "1536x864" });
-        expect(next.width / next.height).toBeCloseTo(16 / 9, 4);
+        const painted = { width: next.width, height: next.height };
+        expect(painted.width / painted.height).toBeCloseTo(16 / 9, 6);
         expect(next.metadata?.size).toBe("1536x864");
     });
 
@@ -321,5 +360,33 @@ describe("a step is handed a picture, not a size", () => {
         expect(cardBoxForRun(config, { ...card, ...box }, { model: "image-zit", size: "1024x1024" })).toEqual({});
         // Only the box: the top-left stays where it was, as `resize_node` keeps it (#270).
         expect(box).not.toHaveProperty("position");
+    });
+});
+
+/**
+ * Where the frame is drawn, read from the renderer.
+ *
+ * Every number above is already right, and that is the point: the band the user reported was not in the arithmetic
+ * but in the drawing — a border taken out of the card's rect put the canvas between the picture and the frame
+ * (#360). So this reads the renderer, the way `overlay-z-index.test.ts` reads the source for the numbers it cannot
+ * reach any other way.
+ */
+describe("the frame around that box", () => {
+    const source = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/components/canvas/canvas-node.tsx");
+
+    test("the frame is drawn outside the card's rect, which is the picture's rect (#360)", async () => {
+        const raw = await readFile(source, "utf8");
+        // The frame's element, pinned to the rect and pulled out by its own thickness: with `box-sizing: border-box`
+        // that leaves its content box — the area the picture is painted in — exactly the rect. Filling the rect
+        // with the frame instead, as `h-full w-full` did, is what took 4px out of the picture on every side.
+        expect(raw).toMatch(/<div\s+className="absolute overflow-visible"/);
+        expect(raw).toContain("inset: -NODE_CARD_FRAME");
+        expect(raw).toContain("borderWidth: NODE_CARD_FRAME");
+        // One number for the frame and one for the corner, drawn from here rather than from utility classes
+        // (`rounded-3xl border-2` was the old pair, and the renderer had no way to agree with it).
+        expect(raw).not.toContain("rounded-3xl");
+        // Content keeps the frame's inner curve: clipped to the outer one, the canvas shows at four corners too.
+        expect(raw).toContain("const CONTENT_RADIUS = NODE_CARD_RADIUS - NODE_CARD_FRAME;");
+        expect(raw).toContain("borderRadius: CONTENT_RADIUS");
     });
 });

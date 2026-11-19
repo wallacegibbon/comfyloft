@@ -8,7 +8,7 @@ import { formatBytes } from "@/lib/image-utils";
 import { pickImageSource } from "@/lib/image-thumbnail";
 import { previewUrlFor, subscribeImagePreviews, getImagePreviewRevision } from "@/services/image-storage";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
-import { NODE_MIN_SIZE, nodeRatio } from "@/lib/canvas/canvas-node-size";
+import { NODE_CARD_FRAME, NODE_CARD_RADIUS, NODE_MIN_SIZE, nodeRatio } from "@/lib/canvas/canvas-node-size";
 import { LoraNodeContent } from "@/components/canvas/nodes/lora-node";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { CanvasNodeProgressRing } from "./canvas-node-progress-ring";
@@ -64,6 +64,15 @@ type NodeContentRendererProps = {
     onDownloadImage?: () => void;
     groupChildCount: number;
 };
+
+/**
+ * The radius a card's content is clipped to — the frame's own corner, less its thickness.
+ *
+ * The frame is drawn outside the card's rect (#360) with radius `NODE_CARD_RADIUS`, so the curve its inner edge
+ * describes is 2px tighter. Content clipped to the outer radius sits inside that curve and the canvas shows through
+ * the four corners: the same off-by-the-frame error, at the corners instead of the sides.
+ */
+const CONTENT_RADIUS = NODE_CARD_RADIUS - NODE_CARD_FRAME;
 
 export const CanvasNode = React.memo(function CanvasNode({
     data,
@@ -256,9 +265,16 @@ export const CanvasNode = React.memo(function CanvasNode({
             }}
         >
             <div
-                className="relative h-full w-full overflow-visible rounded-3xl border-2"
+                className="absolute overflow-visible"
                 style={{
+                    // The frame is drawn *around* the card's rect, not cut out of it. The rect a node record
+                    // carries is the picture's rect, and a border taken off it would leave the canvas showing
+                    // between the picture and the frame — 4.9px on each side of a 640×186.6 card (#360). The
+                    // border-box is the rect plus this on every side, so its content box is the rect itself.
+                    inset: -NODE_CARD_FRAME,
                     background: isGroup || hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
+                    borderWidth: NODE_CARD_FRAME,
+                    borderRadius: NODE_CARD_RADIUS,
                     borderColor: isGroup ? (isGroupDropTarget || isActive ? selectionBlue : theme.node.stroke) : hasImageContent ? imageBorderColor : isActive ? selectionBlue : isRelated ? theme.node.muted : theme.node.stroke,
                     borderStyle: isGroup ? "dashed" : "solid",
                     boxShadow: isGroupDropTarget ? `0 0 0 2px ${selectionBlue}66, inset 0 0 0 999px ${selectionBlue}10` : isActive ? `0 0 0 1px ${selectionBlue}55` : isRelated ? `0 0 0 1px ${theme.node.muted}55, 0 18px 48px rgba(0,0,0,.14)` : undefined,
@@ -295,10 +311,11 @@ export const CanvasNode = React.memo(function CanvasNode({
                 }}
             >
                 <div
-                    className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-[inherit]"
+                    className="relative flex h-full w-full items-center justify-center overflow-hidden"
                     style={
                         {
                             background: isGroup || hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
+                            borderRadius: CONTENT_RADIUS,
                         } as React.CSSProperties
                     }
                 >
@@ -477,7 +494,7 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
     const content = node.metadata?.content || "";
 
     return (
-        <div className="flex h-full w-full flex-col overflow-hidden rounded-3xl">
+        <div className="flex h-full w-full flex-col overflow-hidden" style={{ borderRadius: CONTENT_RADIUS }}>
             {isEditingContent ? (
                 <CanvasResourceMentionTextarea
                     ref={textareaRef}
@@ -639,7 +656,7 @@ function ImageContent({ node, scale, onDownload }: { node: CanvasNodeData; scale
         : undefined;
 
     return (
-        <div className="relative h-full w-full overflow-hidden rounded-3xl">
+        <div className="relative h-full w-full overflow-hidden" style={{ borderRadius: CONTENT_RADIUS }}>
             {content ? <img src={source} alt="" draggable={false} onDragStart={(event) => event.preventDefault()} className="pointer-events-none block h-full w-full select-none object-contain" /> : <ImageSlotStatus node={node} />}
             {content ? (
                 <button

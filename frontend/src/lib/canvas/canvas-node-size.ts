@@ -41,6 +41,28 @@ export function nodeRatio(node: Pick<CanvasNodeData, "width" | "height" | "metad
 }
 
 /**
+ * The frame a card is drawn with — its border's thickness, drawn *outside* the box the node record carries.
+ *
+ * A card's box is the picture's rect, and that is the one rectangle every reader of a card agrees on: the fit,
+ * the drag, the agent's `resize_node`, the picture. The frame is drawn around it, not cut out of it, so nothing
+ * has to know it exists — which is the whole reason there is no arithmetic about it anywhere. `canvas-node.tsx`
+ * draws the border from this number rather than from a utility class because it is the only place the number is
+ * written. A frame cut out of the box instead is what #360 is about: a 640×186.6 card holding a 487×142 picture
+ * painted 636×182.6, so the picture stopped short of the border by 4.9px on each side, and because a card that
+ * holds a picture has no fill of its own the canvas showed through it — a black line inside the blue border, on a
+ * card whose two ratios were reported as identical. Squares hide it (a square minus a border is still a square),
+ * which is why the square graphs never showed the seam.
+ */
+export const NODE_CARD_FRAME = 2;
+
+/**
+ * A card's corner radius: the frame's outer curve.
+ *
+ * Content is clipped to `NODE_CARD_RADIUS - NODE_CARD_FRAME`, which is that curve's inner edge (#360).
+ */
+export const NODE_CARD_RADIUS = 24;
+
+/**
  * The box that holds a shape inside a box: the shape itself, inside the limits, never under the floor.
  *
  * This is the only code in the canvas that turns a shape into a size, and every writer of a card's box goes
@@ -51,8 +73,12 @@ export function nodeRatio(node: Pick<CanvasNodeData, "width" | "height" | "metad
  * The floor is what the drag and `resize_node` refuse to go under, so it is honoured: the pair grows. A shape
  * outside the aspect the canvas accepts for a picture is material rather than an ask, and no pair both keeps it
  * and stays inside a card — those are kept inside the limits, so a panorama stays a panorama instead of becoming
- * a card 3200 wide. Something that is not a card — a preview drawn inside one — passes no floor, because it has
- * to stay inside the card that holds it.
+ * a card 3200 wide. Something that is not a card — a preview drawn inside one — passes no floor, because it has to
+ * stay inside the card that holds it.
+ *
+ * The box this returns is the picture's rect, exactly: no room is made in it for a frame, because a card's frame
+ * is drawn outside it (#360). A card drawn at a ratio and a picture painted inside it with `object-contain`
+ * therefore have nothing left between them.
  */
 export function fitBox(shape: MediaShape, limits: MediaShape, floor: MediaShape = NODE_MIN_SIZE): MediaShape {
     const ratio = shape.width / Math.max(1, shape.height);

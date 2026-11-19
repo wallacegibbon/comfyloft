@@ -12375,3 +12375,51 @@ the scale row lost its `auto`),
 `frontend/src/i18n/locales/{en-US,zh-CN}.ts` (`positiveImageRatio` gone — no ratio is parsed at request time
 any more). Corrects #306's "a square for a picture", and completes #354: the box is the ask's shape, and now
 there is one place that says what the ask's shape is.
+
+## 360. A card's rect is the picture's rect; its frame is drawn outside it
+
+**Decision** The box a card records **is** the rectangle its picture is painted in. Nothing subtracts a frame from
+it and nothing adds one back: a fit, a corner drag, `resize_node` and the picture all use that one rectangle, and
+the frame a card is drawn with — its thickness (`NODE_CARD_FRAME`) and its corner (`NODE_CARD_RADIUS`) — is
+positioned *outside* it (`inset: -NODE_CARD_FRAME`), with the border drawn from those two numbers rather than from
+utility classes. Content is clipped to `NODE_CARD_RADIUS - NODE_CARD_FRAME`, the inside edge of that curve.
+#359's rule stands exactly as written; what was wrong was that the frame was cut out of the box.
+
+**Why** "蓝色的边框跟里面的图片…两边还有间隙" — and it was there, 4.9px on each side. A card 640×186.6 holding the
+487×142 picture it had been made for: equal ratios on the box (3.4296 both), unequal inside it, because
+`border-2` is drawn *inside* the box and 636×182.6 is 3.4830. The picture is `object-contain` in that inner area,
+so it stopped short of the border, and a card that holds a picture has no fill of its own — the canvas showed
+through, a dark line inside the blue frame. Squares hide it: a square minus a border is still a square. That is
+why every square graph looked right, and why #359's tests passed: they compared the shape with the box, which is
+what the picture *is*, while the border had quietly been drawn somewhere else.
+
+**What this makes visible** One rectangle per card, for every reader of one. The frame is decoration drawn around
+it, so it cannot disagree with it — which is the whole reason there is no arithmetic about it anywhere in this
+tree. Canvases already written are already right: the boxes in them are picture-shaped, and only the drawing was
+wrong, so nothing needs repairing.
+
+**Rejected** Making the stored box the frame *plus* the picture — `fitBox` subtracting the border from the limits,
+adding it back, and `heightForShape`/`widthForShape` carrying that equation into the drag and into `resize_node`.
+It removes the band too, and it was the first attempt; it is rejected because it puts the frame in the data: every
+card becomes 4px larger than the fit that made it, the floor the agent is told about moves from 240 to 238, two
+more functions exist to solve a subtraction and an addition, and the canvases already written stay wrong until
+something rewrites them — which is why the change was invisible from the user's side. Painting the picture over
+the frame, or filling the card so the band matches the card: both keep two rectangles and pick the visible one.
+
+**Cost** A card's visible size is its recorded rect plus 4px, and the frame's 2px ring is part of the card for
+pointer purposes. The corner is still two numbers that have to agree (`NODE_CARD_RADIUS` and the content's
+`NODE_CARD_RADIUS - NODE_CARD_FRAME`); they are kept in one place, and a test asserts that they are.
+
+**Tested** `frontend/tests/node-card-size.test.ts`: the reported numbers are a case of their own —
+`fitBox(487×142, IMAGE_CARD_MAX_SIZE)` is asked for its `bandsOf`, the band a picture is left with, and both axes
+must be zero (so must the same question asked of a card the fit settled on the floor, and of a square, which never
+had the problem) — and `describe("the frame around that box")` reads the renderer for the half no arithmetic can
+reach: the frame element pinned with `inset: -NODE_CARD_FRAME`, the border drawn from `NODE_CARD_FRAME`, no
+`rounded-3xl` left in the file, and content clipped to `NODE_CARD_RADIUS - NODE_CARD_FRAME`. 58 files / 697 tests,
+the typecheck, and the i18n/exports/decisions/comment/prettier gates. The drawing was watched at the reported
+numbers: a card whose record says 640×186.6 over a 487×142 picture paints all of it, band 0 on both axes, with the
+blue frame's box at 644×190.6 around it.
+
+**Where** `frontend/src/lib/canvas/canvas-node-size.ts` (`NODE_CARD_FRAME`, `NODE_CARD_RADIUS`, and `fitBox`
+knowing neither), `frontend/src/components/canvas/canvas-node.tsx` (the frame drawn outside the rect;
+`CONTENT_RADIUS`).
