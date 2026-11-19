@@ -599,6 +599,7 @@ export default {
             clear: "清空",
             clearDescription: "这会删除当前画布上的所有节点和连线。",
             maskNodeNeeded: "局部重绘需要一张遮罩：用标记工具在这张图上画出区域，或连一个带遮罩的节点",
+            outpaintSourceNeeded: "扩图需要一张要扩的图：这张卡上还没有图片，所以扩图窗口没有可画的东西",
             modeNoWorkflow: "这台机器上没有能{{label}}的工作流：先装一个能做的；或把这张图连到一个会运行的节点上当参考",
             modeBlocked: "{{label}}需要这台机器没有安装的节点包，运行会在 ComfyUI 里失败：去「准备资源」补上",
         },

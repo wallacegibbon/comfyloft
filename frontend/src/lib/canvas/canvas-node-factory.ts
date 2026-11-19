@@ -2,7 +2,7 @@ import { getNodeSpec } from "@/constant/canvas";
 import { nodeSizeForRun, type RunShapeSettings } from "@/lib/canvas/canvas-node-size";
 import { isInheritableNodeField, recallNodeSettings, rememberNodeSettings } from "@/lib/canvas/node-settings-memory";
 import { activeFileUrl } from "@/services/canvas-files";
-import { modelForWorkflow, modelIsStep, acceptedInputs, type AiConfig } from "@/stores/use-config-store";
+import { modelForWorkflow, modelIsStep, acceptedInputs, acceptsInput, type AiConfig } from "@/stores/use-config-store";
 import type { UploadedImage } from "@/services/image-storage";
 import type { UploadedFile } from "@/services/file-storage";
 import type { RunFacts } from "@/services/api/runs";
@@ -134,9 +134,16 @@ export function buildImageGenerationMetadata(config: AiConfig, references: Refer
     // those would describe a run that never had them, and the node's own record is read back by the panel
     // and by the agent.
     if (modelIsStep(config, config.model)) return { model: config.model, ...(config.params ? { params: config.params } : {}), ...referencesOf };
+    // A variant mode that reads a picture takes no size either: its answer is the shape of the picture it
+    // repaints, or the canvas an outpaint states. Recording one would describe a run that was never asked for a
+    // shape, and this record is what a card's box is decided from — `cardBoxForRun` reads it at the press, so a
+    // recorded `auto` would shrink a card that was drawn at its answer's shape (#354). The contract is what
+    // says so, which is the same #304 reading that hides the size control for those modes: a key the workflow
+    // does not read is not one the canvas states.
+    const statesShape = acceptsInput(config, config.model, "size", config.imageMode) !== false;
     return {
         model: config.model,
-        size: config.size,
+        ...(statesShape ? { size: config.size } : {}),
         quality: config.quality,
         ...(config.background ? { background: config.background } : {}),
         ...(config.imageMode ? { imageMode: config.imageMode as CanvasNodeMetadata["imageMode"] } : {}),

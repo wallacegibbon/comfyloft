@@ -18,7 +18,7 @@ afterAll(() => {
 });
 
 const { defaultConfig, modelForWorkflow, modelIsStep } = await import("../src/stores/use-config-store");
-const { buildStepNodeMetadata } = await import("../src/lib/canvas/canvas-node-factory");
+const { buildImageGenerationMetadata, buildStepNodeMetadata } = await import("../src/lib/canvas/canvas-node-factory");
 const { nodeCanGenerate } = await import("../src/lib/canvas/canvas-generation-helpers");
 const { IMAGE_ANGLE_WORKFLOW, IMAGE_UPSCALE_WORKFLOW } = await import("../src/lib/canvas/tool-workflows");
 
@@ -111,4 +111,58 @@ test("a node a button creates is ready to run, and runs nothing until asked", ()
     // No content yet — and that is what makes it a generator rather than material: its panel is the step panel,
     // with the source wired in and a send button that is the first thing that spends anything (#297, #301).
     expect(nodeCanGenerate({ id: "n", type: "image", position: { x: 0, y: 0 }, width: 240, height: 240, metadata } as never)).toBe(true);
+});
+
+// A variant mode that reads a picture takes no size: its answer is the shape of the picture it repaints, or the
+// canvas an outpaint states. The record used to write `size: "auto"` for those runs anyway, and a card's box is
+// decided from that record at the press — so re-asking a card that had been drawn at its answer's shape shrank
+// it to whatever `auto` resolves to (#354, #358). The absence is the declaration's answer, the same one that
+// hides the size control for those modes (#304).
+test("a run in a mode that takes no size records no shape", () => {
+    const family: AiConfig = {
+        ...config,
+        channels: [
+            {
+                id: "default",
+                name: "Default",
+                baseUrl: "http://127.0.0.1:8190",
+                models: [
+                    { name: "image-undescribed", capability: "image", workflowId: "image-undescribed", hasPrompt: true },
+                    {
+                        name: "image-qwen21",
+                        capability: "image",
+                        workflowId: "image-qwen21",
+                        hasPrompt: true,
+                        variantModes: ["t2i", "edit", "outpaint"],
+                        contracts: {
+                            t2i: { inputs: ["prompt", "seed", "size", "quality"] },
+                            edit: { inputs: ["prompt", "seed"] },
+                            outpaint: { inputs: ["prompt", "seed", "left", "top", "right", "bottom", "megapixels", "outpaintWidth", "outpaintHeight"] },
+                        },
+                    },
+                ],
+            },
+        ],
+    };
+    const asked = {
+        ...family,
+        model: "default::image-qwen21",
+        imageMode: "outpaint",
+        size: "auto",
+        quality: "auto",
+        outpaint: { left: 0, top: 0, right: 256, bottom: 0, width: 1280, height: 768 },
+    };
+    const metadata = buildImageGenerationMetadata(asked, []);
+    expect(metadata.model).toBe("default::image-qwen21");
+    expect(metadata.imageMode).toBe("outpaint");
+    // What the run was actually told is kept: the canvas it was asked to draw.
+    expect(metadata.outpaint).toEqual(asked.outpaint);
+    // And what it was never told is not claimed.
+    expect(metadata.size).toBeUndefined();
+    // A mode that does size things keeps its size: the absence follows the declaration, it is not a blanket rule.
+    expect(buildImageGenerationMetadata({ ...asked, imageMode: "t2i", size: "1:1" }, []).size).toBe("1:1");
+    // The edit mode reads pictures and lists no size among its inputs, so it records none either.
+    expect(buildImageGenerationMetadata({ ...asked, imageMode: "edit" }, []).size).toBeUndefined();
+    // A model the server listed no inputs for is left alone: nothing is claimed about it (#304's three states).
+    expect(buildImageGenerationMetadata({ ...family, model: "default::image-undescribed", size: "1:1" }, []).size).toBe("1:1");
 });

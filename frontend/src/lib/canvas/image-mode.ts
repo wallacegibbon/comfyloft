@@ -1,4 +1,5 @@
 import { channelModelOf, resolveModelForCapability, workflowModelOptions, type AiConfig, type ChannelModel } from "@/stores/use-config-store";
+import type { CanvasNodeData } from "@/types/canvas";
 
 /**
  * The mode an image run will actually use.
@@ -106,4 +107,42 @@ function runsMode(config: AiConfig, model: string, mode: ImageModeVerb) {
  */
 export function imageModeRefusalKey(reason: ImageModeRefusal) {
     return reason === "blocked" ? "canvas.runtime.modeBlocked" : "canvas.runtime.modeNoWorkflow";
+}
+
+/** What pressing send on a card that is in a paint mode means. */
+type ModePress = "run" | "window" | "refuse";
+
+/**
+ * Whether that press asks the card's own ask again, or states a new one.
+ *
+ * A card that was made by an outpaint run records the canvas it was asked for (`outpaint`) and has the picture
+ * it extends wired into it — so asking it again is the same ask, and an image node answers in place (#228,
+ * #297: "content plus a recorded model: a run of its own, and pressing send asks that model again"). Opening
+ * the window for that press instead put the answer in a second card every time, which is what the user meant by
+ * "它并不是原地生成，而是会创建一个新的节点". The window is for stating a *new* ask: a different canvas is a
+ * different shape, and a card that holds a picture is never resized by one (#354) — so it is a new card, and the
+ * card's bar has the verb that opens it (#357).
+ *
+ * An inpaint card is already in that shape: the mask is a node wired into it, so a press finds the mask and
+ * re-runs. A card that cannot run its own mode — no mask yet, no canvas stated, nothing wired in — is shown the
+ * window that states it, and a card with nothing to draw on gets the sentence instead of a button that opens
+ * nothing.
+ */
+export function pressInMode(node: CanvasNodeData, mode: ImageModeVerb, wired: { picture: boolean; mask: boolean }): ModePress {
+    if (mode === "inpaint") {
+        if (wired.mask) return "run";
+        return node.metadata?.content ? "window" : "refuse";
+    }
+    if (node.metadata?.outpaint && wired.picture) return "run";
+    return node.metadata?.content ? "window" : "refuse";
+}
+
+/**
+ * What a refused press is missing, in the dictionary's words.
+ *
+ * Both modes need a picture to work on, but they need different things beyond it — a mask drawn on one, a canvas
+ * stated around one — and the two sentences name different errands, as every refusal in this tree does.
+ */
+export function modeRefusalKey(mode: ImageModeVerb) {
+    return mode === "inpaint" ? "canvas.runtime.maskNodeNeeded" : "canvas.runtime.outpaintSourceNeeded";
 }

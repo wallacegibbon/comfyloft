@@ -649,7 +649,7 @@ function decodeChannelModel(value: string) {
     return { channelId: value.slice(0, index), model: value.slice(index + CHANNEL_MODEL_SEPARATOR.length) };
 }
 
-export function modelOptionName(value: string) {
+function modelOptionName(value: string) {
     return decodeChannelModel(value)?.model || value;
 }
 

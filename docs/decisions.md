@@ -12184,3 +12184,66 @@ chosen model and record it on the child), `frontend/scripts/check-i18n.cjs`,
 (`canvas.runtime.materialHint`) lists the verbs a material card has, so it gained these two: it is the only place
 that explains to a person what a card with nothing to re-run is for, and it had been corrected once already to
 drop a verb that left the bar.
+
+## 358. A card asks its own ask again; the window states a new one
+
+**Decision** Pressing send on a card in one of the paint modes re-runs **that card** whenever the card already
+states its ask: an outpaint card records the canvas it was asked for (`outpaint`) and has the picture it extends
+wired into it; an inpaint card has a mask node wired into it. The mask and outpaint windows open only when the
+card cannot ask its own ask again — no canvas stated, or no source wired — and a card with nothing to draw on is
+answered in words (`canvas.runtime.maskNodeNeeded`, `canvas.runtime.outpaintSourceNeeded`) rather than by a button
+that opens nothing. One predicate decides it: `pressInMode`. The same change drops the panel's last
+`workflowId === "image-qwen21"` test — the branch is taken when the mode the **request will use** is one of the
+two, which is the same `imageModeFor` the request asks (#267).
+
+And a run in a mode whose contract lists no `size` records no size. A card's box is decided from that record at
+the press, so a shape the run was never asked for moves a card that should not move (#354).
+
+**Why** "当用户在一个已经生成的 outpaint 图片上重新点生成的时候，它并不是原地生成，而是会创建一个新的节点." #297
+already says what that press means: content plus a recorded model is "a run of its own, and pressing send asks
+that model again". The outpaint card is exactly that card — it records the workflow, the mode and the padding —
+and the panel intercepted the press before it could land, so every re-ask built another card, and each one asked a
+different thing (the previous answer, extended again), with no way to say "same framing, new seed". The inpaint
+half of that same branch already answered correctly, because it asks whether a mask is **wired** before opening the
+editor; outpaint was missed because its test read the mode and never the wire.
+
+The box is the other half of the same report, and it hid behind the first one. Re-running in place must not resize
+the card (#354), and the record said it would: an inpaint or outpaint run was recorded with `size: "auto"`,
+`cardBoxForRun` reads that record at the press, and `auto` resolves to a square — measured: a card asked with
+`auto` is resized from 1024×768 to 240×240. The contracts say the record was never true: neither mode binds
+`size`, which is what took the size control off those modes in the first place (#304, #307). The record now
+follows the declaration, which is what the step branch of the same function already does — the absence is the fact.
+
+**Cost** Two gestures mean two different things, and each is named for what it does: send asks this card's canvas
+again, in this card; the card's 扩图 / 局部重绘 verb states a new canvas and makes a new card (#357). A card whose
+source or mask wire was deleted cannot ask its own ask again and gets the window, which is what makes a new wire.
+Canvases written before this keep `size: "auto"` on those cards until their next press rewrites the record — and a
+box is decided from the record a press **writes**, not the one the card carried, so the shrink described above
+never happens to an existing canvas either. No migration.
+
+**Rejected** Making the outpaint window write into the card it was opened from: the window states a canvas, a
+different canvas is a different shape, and a card that holds a picture is not resized by one (#354) — so a "same
+card, new shape" press would have to invent an answer for the picture already there. Also rejected: a special case
+in the panel that skips the window when the numbers are recorded but never looks at the wire — that sends a
+mode-outpaint request with no source and leaves ComfyUI to notice, against #297 ("a run reads only what is
+connected"). Also rejected: keeping `size: "auto"` in the record and teaching `cardBoxForRun` to distrust it for
+paint modes, which keeps a claim the run never made and adds a second rule to unsay it.
+
+**Tested** `frontend/tests/image-mode-press.test.ts` (8): an outpaint card with a stated canvas and a wired
+picture runs in place; one with no canvas of its own, or with the wire gone, opens the window; an empty card is
+refused. The inpaint half pins the behaviour that already worked, so it cannot drift: a wired mask re-runs in
+place, an unmasked picture opens the editor, and a card with nothing to paint on is refused.
+`frontend/tests/step-node-metadata.test.ts` (+1): a run in a mode whose contract lists no `size` records none but
+keeps the canvas it was told; a mode that does list `size` keeps it; a model declaring no inputs is left alone
+(#304's three states). `npx vitest run` (669), `npx tsc --noEmit`, `npm run check` (i18n 841/808 — the two
+refusal keys are chosen by a function, so they are listed in `HAND_RESOLVED`). **Not watched in a browser**, where
+it wants one look: an outpaint card asked again lands in the same card at the same size, and its 扩图 button still
+makes a new one.
+
+**Where** `frontend/src/lib/canvas/image-mode.ts` (`pressInMode`, `modeRefusalKey`),
+`frontend/src/components/canvas/canvas-node-prompt-panel.tsx` (`submit`: the mode the request will use, then the
+press; the workflow-id test is gone, and with it `workflowId`),
+`frontend/src/lib/canvas/canvas-node-factory.ts` (`buildImageGenerationMetadata`: no shape for a mode that takes
+none), `frontend/scripts/check-i18n.cjs`, `frontend/src/i18n/locales/{en-US,zh-CN}.ts`
+(`canvas.runtime.outpaintSourceNeeded`). The panel was `modelOptionName`'s last caller outside the store, so the
+store no longer exports it — an export nobody calls is the same kind of leftover as a field nobody reads.

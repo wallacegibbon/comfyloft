@@ -79,6 +79,10 @@ const HAND_RESOLVED = [
     // `lib/canvas/image-mode.ts` and read where the press is answered (`project.tsx`, `use-image-editors.ts`).
     "canvas.runtime.modeBlocked",
     "canvas.runtime.modeNoWorkflow",
+    // `t(modeRefusalKey(mode))`: what a press is missing when the card cannot ask its own ask again — a mask
+    // drawn on a picture, or a picture to extend. Same single table, read in the prompt panel.
+    "canvas.runtime.maskNodeNeeded",
+    "canvas.runtime.outpaintSourceNeeded",
 ];
 
 // Namespaces reached by string concatenation, declared one by one. Two forms:

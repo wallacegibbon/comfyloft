@@ -7,8 +7,9 @@ import { Button } from "@/components/kit/button";
 import { Dialog } from "@/components/kit/dialog";
 import { toast } from "@/components/kit/toast";
 import { Tooltip } from "@/components/kit/tooltip";
-import { channelModelOf, defaultConfig, modelIsStep, modelOptionName, modelTakesPrompt, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig, type ModelAccepts } from "@/stores/use-config-store";
+import { channelModelOf, defaultConfig, modelIsStep, modelTakesPrompt, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig, type ModelAccepts } from "@/stores/use-config-store";
 
+import { imageModeFor, modeRefusalKey, pressInMode } from "@/lib/canvas/image-mode";
 import { nodePromptOf, promptPatch } from "@/lib/canvas/node-prompt-field";
 import { useCanvasTheme } from "@/lib/canvas/use-canvas-theme";
 import { isPlainEnterKey } from "@/lib/keyboard-event";
@@ -85,7 +86,6 @@ export function CanvasNodePromptPanel({
     // there — so it is the request, not the panel, that carries these words (docs/decisions.md #185).
     const connectedText = mentionReferences.some((reference) => reference.kind === "text" && reference.text?.trim());
     const channelModel = channelModelOf(config, config.model)?.model;
-    const workflowId = channelModel?.workflowId || modelOptionName(config.model);
     // What the selected workflow declared, rather than which workflow it is: a workflow whose contract allows
     // no media at all refuses a reference, and one whose bindings never read `seconds` takes its length from
     // the clip being edited. Both used to be recognised by id (`video-h3-t2v`, `video-h3-character-swap`).
@@ -160,24 +160,28 @@ export function CanvasNodePromptPanel({
             return;
         }
         commitPrompt(draft);
-        if (mode === "image" && workflowId === "image-qwen21") {
-            // A mask is a node: whichever connected node carries one supplies it, so a run wired by
-            // hand works the same as one the editor made. Without a mask there is nothing to inpaint.
+        // The mode the request will actually use, not the one the card happens to record: a stale mode can belong
+        // to a workflow that has none, and a run of that is #267's request for something the graph cannot do.
+        const runMode = imageModeFor(config, config.model);
+        if (mode === "image" && (runMode === "inpaint" || runMode === "outpaint")) {
+            // A mask is a node, so whichever connected card carries one supplies it: a run wired by hand is the
+            // same run the mask editor made.
             const hasMask = imageReferences.some((reference) => Boolean(nodes.find((item) => item.id === reference.nodeId)?.metadata?.mask?.storageKey));
-            if (config.imageMode === "inpaint" && !hasMask) {
-                // The editor draws on the node's own picture, so it cannot open on a node that has none:
-                // without this the button would just do nothing.
-                if (!node.metadata?.content) {
-                    toast.warning(t("canvas.runtime.maskNodeNeeded"));
-                    return;
-                }
-                onOpenMaskEditor?.(node.id);
+            const press = pressInMode(node, runMode, { picture: imageReferences.length > 0, mask: hasMask });
+            if (press === "refuse") {
+                // Neither window opens on a card it cannot draw on, and a button that opens nothing is the one
+                // answer nobody can act on.
+                toast.warning(t(modeRefusalKey(runMode)));
                 return;
             }
-            if (config.imageMode === "outpaint") {
-                onOpenOutpaintEditor?.(node.id);
+            if (press === "window") {
+                // The card has no ask of its own to repeat: the window is where the mask or the canvas is stated,
+                // and what it states belongs to a new card (#358, #354).
+                if (runMode === "inpaint") onOpenMaskEditor?.(node.id);
+                else onOpenOutpaintEditor?.(node.id);
                 return;
             }
+            // Otherwise the press falls through and asks this card's own ask again, in this card.
         }
         onGenerate(node.id, mode, text);
     };

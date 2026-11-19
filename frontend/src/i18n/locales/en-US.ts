@@ -565,6 +565,7 @@ export default {
             clear: "Clear",
             clearDescription: "This will delete every node and connection on the current canvas.",
             maskNodeNeeded: "Inpaint needs a mask: mark the area on this image with the mask tool, or connect a node that carries one",
+            outpaintSourceNeeded: "Outpaint needs a picture to extend: this card holds none, so the outpaint window has nothing to draw on",
             modeNoWorkflow: "No workflow installed here can {{label}}: install one that can, or connect this picture to a node that runs — that run takes it as a reference",
             modeBlocked: "{{label}} needs node packs this install does not have, so the run would fail inside ComfyUI: add them under Prepare resources",
         },
