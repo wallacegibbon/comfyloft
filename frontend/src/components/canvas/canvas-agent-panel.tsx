@@ -4,7 +4,21 @@ import { ArrowUp, Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, Eraser,
 
 import { citationLabel, mentionResolver, referenceBlock, referenceLine, type Citation, type MentionSegment } from "@/lib/canvas/agent-references";
 import { insertSpoken } from "@/lib/canvas/agent-dictation";
-import { agentIsWorking, agentRunState, resumeTurn, textOf, transcriptEvent, transcriptWindow, turnFromFrame, turnStartedAt, type AgentRunState, type ToolStep, type TranscriptMessage, type TurnInstant } from "@/lib/canvas/agent-transcript";
+import {
+    agentIsWorking,
+    agentRunState,
+    queueFromFrame,
+    resumeTurn,
+    textOf,
+    transcriptEvent,
+    transcriptWindow,
+    turnFromFrame,
+    turnStartedAt,
+    type AgentRunState,
+    type ToolStep,
+    type TranscriptMessage,
+    type TurnInstant,
+} from "@/lib/canvas/agent-transcript";
 import { contextSegment, speedSegment } from "@/lib/canvas/agent-usage";
 import { nodeContentOf } from "@/lib/canvas/node-prompt-field";
 import { reasoningPreview } from "@/lib/canvas/reasoning-preview";
@@ -162,23 +176,29 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
      * How many messages are waiting in the agent's queue for the running task.
      *
      * The agent announces each one as it takes it (`queued`), and announces `delivered` **once** for the
-     * whole batch — it inserts them together. So the number is built from the queued frames and cleared
-     * outright on delivery, not decremented: one delivery empties the queue.
+     * whole batch — it inserts them together. So the number is never a tally this page keeps: every frame
+     * that mentions the queue states the size, and `queueFromFrame` is what applies them, including the
+     * frame that opens the socket (#345) and the frames that end the turn (#362).
      */
     const [steering, setSteering] = useState(0);
     /**
      * The turn, as one line of text.
      *
-     * The two facts that used to be two rows — is the agent waiting, and how many messages are queued behind
-     * it — are decided in `agentRunState` and worded here per state, rather than glued together out of two
-     * sentences: a language that names the count first is a translation, not a second layout.
+     * The two facts that used to be two rows — is the agent waiting, and is anything queued behind it — are
+     * decided in `agentRunState` and worded here per state, rather than glued together out of two sentences:
+     * a language that puts them in the other order has to be a translation, not a second layout.
+     *
+     * Neither line counts anything (#362). The agent inserts everything that is queued as one batch, so what a
+     * message changes is whether there is a queue, never how many steps it adds; and no line may promise where
+     * the words will be inserted that a state cannot confirm — `queued` is drawn while the queue outlives the
+     * wait, and the queue is empty the moment the turn ends.
      */
     const runState = agentRunState(working, steering);
     const turnLines: Record<AgentRunState, string> = {
         idle: "",
         waiting: t("canvas.agent.working", { seconds: waited }),
-        "waiting-queued": t("canvas.agent.workingQueued", { seconds: waited, count: steering }),
-        queued: t("canvas.agent.steeringQueued", { count: steering }),
+        "waiting-queued": t("canvas.agent.workingQueued", { seconds: waited }),
+        queued: t("canvas.agent.steeringQueued"),
     };
     const turnLine = turnLines[runState];
     /**
@@ -281,11 +301,14 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
      * not, working or idle, and how many messages are waiting in the agent's queue.
      */
     const applyEvent = (event: AgentEvent) => {
+        // What this frame says about the queue is decided in one place, from what the frame states rather
+        // than from a tally this page keeps: the same facts a page that reconnects is told (#345), and the
+        // same rule the session applies to itself when the turn ends (#362).
+        setSteering((current) => queueFromFrame(event, current));
         if (event.type === "steering") {
-            // A queue nobody can see looks like a message that was lost. The size travels with the frame,
-            // counted by the session from the agent's own phases, so the page draws it instead of keeping a
-            // tally of its own — the tally was what a reload lost (#345).
-            setSteering(event.queued ?? 0);
+            // A queue nobody can see looks like a message that was lost, which is why the size travels with
+            // the frame, counted by the session from the agent's own phases. The frame is not a message and
+            // not part of the conversation, so it reaches nothing else here.
             return;
         }
         if (event.type === "turn") {
@@ -304,7 +327,6 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
             // and its clock — the wait for the provider is exactly what the row is there for (#349).
             const stated = event.running ? { startedAt: turnStartedAt(event.elapsedMs, performance.now()) } : null;
             setTurn((current) => turnFromFrame(current, stated));
-            setSteering(event.queued ?? 0);
             if (event.running) setMessages(resumeTurn);
             return;
         }
@@ -325,7 +347,6 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
         if (event.type === "closed") {
             setStatus("closed");
             setTurn(null);
-            setSteering(0);
         }
         setMessages((current) => transcriptEvent(current, event));
     };
@@ -714,7 +735,7 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
             </div>
 
             <div className="relative border-t px-2 py-2" style={{ borderColor: theme.toolbar.border }}>
-                {/* The turn, in one row: waiting for its first word, how many messages are queued behind it,
+                {/* The turn, in one row: waiting for its first word, whether anything is queued behind it,
                     or both at once. It is drawn from the send (`agentIsWorking`) rather than from a frame, so
                     it is up before the model has said anything, and it is not a word about thinking — the
                     folded reasoning in the transcript already carries that.
@@ -724,6 +745,8 @@ export function CanvasAgentPanel({ canvasId, nodes, onFocusNode, onPickNode }: P
                     scroll out of sight in a long conversation (#315). This row does not scroll — it sits where
                     the message was sent from and where the stop button is, and what happens to those queued
                     words when the turn is stopped is asked at the moment of stopping (see the dialog below).
+                    It counts nothing: the queue is drawn as a fact about the words the user just sent, because
+                    every copy of that sentence has to hold in the states where no step is running (#362).
                     The microphone's row under it is a different subject. */}
                 {runState !== "idle" ? (
                     <p className="flex items-center gap-1.5 px-1 pb-1 text-[11px] tabular-nums opacity-60" title={working ? t("canvas.agent.workingHint") : undefined}>

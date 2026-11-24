@@ -642,9 +642,10 @@ func (s *Session) clearTurn() {
 // is a count of announcements — this side's measurement of what the agent said, which is what #343 allows —
 // and it is kept here rather than in the page because the page is what a reload replaces (#345).
 //
-// A phase this build has not met is read as terminal. That is the direction that keeps the row honest: a queue
-// nobody can see is worse than a number that under-reports, and the count is restated from zero with the next
-// `queued`.
+// A phase this build has not met is read as terminal. That is the direction that keeps the panel honest: the
+// row this number drives only ever says whether there is a queue, and the one place a number is shown — the
+// cancel dialog, which asks whether to throw the queued words away too (#238) — is better off understating
+// what it would lose than overstating it. The count is restated from zero with the next `queued`.
 func (s *Session) noteSteering(phase string) int {
 	s.busyMu.Lock()
 	defer s.busyMu.Unlock()

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { referenceBlock, referenceLine } from "@/lib/canvas/agent-references";
-import { agentIsWorking, agentRunState, resumeTurn, transcriptEvent, transcriptWindow, turnFromFrame, turnStartedAt, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
+import { agentIsWorking, agentRunState, queueFromFrame, resumeTurn, transcriptEvent, transcriptWindow, turnFromFrame, turnStartedAt, type ToolStep, type TranscriptMessage } from "@/lib/canvas/agent-transcript";
 import type { AgentEvent } from "@/services/api/agent";
 
 /**
@@ -231,6 +231,57 @@ describe("the one line the running turn is drawn as", () => {
 
     it("draws nothing for a turn that is not running and a queue that is empty", () => {
         expect(agentRunState(false, 0)).toBe("idle");
+    });
+});
+
+/**
+ * What one frame does to the queue that line is drawn from.
+ *
+ * The queue is not a tally the page keeps. The agent states a phase per message it takes and never a size, so
+ * the session counts those announcements and states the size with every frame that mentions the queue (#345).
+ * Two directions used to be wrong in opposite ways, and both are checked here: a page that reloaded into a
+ * turn had no queue to show while one was waiting, and a page that watched a turn end kept showing a queue the
+ * session had already forgotten — with no stop button beside it, since the turn was really over (#362).
+ */
+describe("the queue a running turn is told about", () => {
+    it("is the size the frame states, never a difference the page works out", () => {
+        expect(queueFromFrame({ type: "steering", phase: "queued", queued: 1 }, 0)).toBe(1);
+        expect(queueFromFrame({ type: "steering", phase: "queued", queued: 2 }, 1)).toBe(2);
+        // One `delivered` for the whole batch, because the agent inserts them together: the frame that ends a
+        // submission ends the queue, it does not take one message out of it.
+        expect(queueFromFrame({ type: "steering", phase: "delivered", queued: 0 }, 2)).toBe(0);
+        // `queued` is omitted when it is zero, so a frame that mentions the queue and states no size states
+        // none — a page that read the absence as "no news" would keep a queue that is gone.
+        expect(queueFromFrame({ type: "steering", phase: "refused" }, 2)).toBe(0);
+    });
+
+    it("comes back with the frame that opens the socket, so a reload joins the queue it landed in", () => {
+        expect(queueFromFrame({ type: "turn", running: true, elapsedMs: 90_000, queued: 2 }, 0)).toBe(2);
+        // The same frame on a session holding nothing says nothing is held, and that answer outranks whatever
+        // this page last saw.
+        expect(queueFromFrame({ type: "turn", running: false }, 2)).toBe(0);
+    });
+
+    it("goes with the turn, because a queue is messages waiting for a task", () => {
+        expect(queueFromFrame({ type: "done" }, 2)).toBe(0);
+        // A refusal ends the turn its message opened (#349), and a socket going away forgets what the next
+        // one will restate.
+        expect(queueFromFrame({ type: "error", message: "这一轮不能插入" }, 2)).toBe(0);
+        expect(queueFromFrame({ type: "closed" }, 2)).toBe(0);
+        // The pair this is the fix for: the row has to fall silent with the turn, which is what a page
+        // reloading at the same instant was already told.
+        expect(agentRunState(false, queueFromFrame({ type: "done" }, 2))).toBe("idle");
+    });
+
+    it("is left alone by every frame that says nothing about it", () => {
+        const unrelated: AgentEvent[] = [
+            { type: "delta", text: "再看一眼画布。" },
+            { type: "tool_call", callId: "c1", name: "canvas_list_nodes" },
+            { type: "usage", contextTokens: 1200, stepTps: 3.5 },
+        ];
+        for (const event of unrelated) {
+            expect(queueFromFrame(event, 2)).toBe(2);
+        }
     });
 });
 

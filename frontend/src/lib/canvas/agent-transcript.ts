@@ -187,6 +187,42 @@ export function turnFromFrame(mine: TurnInstant | null, stated: TurnInstant | nu
 }
 
 /**
+ * What one frame does to the queue this page shows.
+ *
+ * Two frames speak about the queue, and both state a total rather than a change: `steering` and `turn` say its
+ * **size**. The agent announces one phase per message it takes and never a size, so the session counts those
+ * announcements and puts the total on every frame that mentions the queue — including the one that opens a
+ * socket, which is what lets a page that comes back join a queue instead of counting from nothing (#345). No
+ * other frame is news about the queue, so nothing else may move it: a page that inferred one from `delta` and
+ * `tool_call` frames would invent queues.
+ *
+ * `done`, `error` and `closed` empty it. That is not a guess about what the agent still holds — it is the rule
+ * the session already applies to itself: a queue is messages waiting for a task, and these frames say the task
+ * is over (`clearTurn`, `internal/agent/sessions.go`, zeroes the count with the turn). Skipping it leaves a
+ * page that watched a turn end drawing a queue that the same server tells a reloading page is gone — and with
+ * no stop button next to it, because the turn really has gone.
+ *
+ * The size travels rather than a yes/no, because the cancel dialog asks what to do with the queue and that
+ * question is only worth asking when there is something to name (#238).
+ */
+export function queueFromFrame(event: AgentEvent, current: number): number {
+    switch (event.type) {
+        case "steering":
+        case "turn":
+            return event.queued ?? 0;
+        case "done":
+        // A refusal ends the turn the send opened (#349), and a failure inside a turn is followed by its own
+        // `done` a frame later — the panel already reads `error` as the turn being over, and the queue goes
+        // with it.
+        case "error":
+        case "closed":
+            return 0;
+        default:
+            return current;
+    }
+}
+
+/**
  * The panel's one line about the running turn — which of the four states it is in.
  *
  * The wait and the queue are the same subject (a turn is running) and they used to be two rows with a
@@ -196,7 +232,8 @@ export function turnFromFrame(mine: TurnInstant | null, stated: TurnInstant | nu
  * the moment the answer has words while the queue outlives that — a queue nobody can see looks like a message
  * that was lost.
  *
- * A count of zero is no queue: the number comes from counted frames, and a row is not drawn for nothing.
+ * A count of zero is no queue: the number is what the frames state (`queueFromFrame`), and a row is not
+ * drawn for nothing.
  */
 export type AgentRunState = "idle" | "waiting" | "waiting-queued" | "queued";
 

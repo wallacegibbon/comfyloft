@@ -10254,6 +10254,10 @@ drawn from one four-state value (`agentRunState(working, queued)` in `agent-tran
 | `waiting-queued` | 处理中… 3 秒（2 条消息已排队,会在当前步骤之后一起插入） |
 | `queued` | 2 条消息已排队,会在当前步骤之后一起插入 |
 
+**Amended by #362** Neither row counts anything now, and the promise that a step is running went with the
+number: both say that the words were taken and will be inserted before the next step. The row itself, its
+place, its one spinner, and the four states that choose its wording are unchanged.
+
 One spinner, one place, `text-[11px]` like the dictation row under it. The transcript lost its trailing spinner,
 so its auto-follow effect went back to depending on the messages alone — nothing in that box appears without a
 message to announce it any more.
@@ -12476,3 +12480,64 @@ picked card's frame is that palette's own grey-free blue, and it carries the sam
 **Where** `frontend/src/lib/canvas/canvas-card-frame.ts` (the one rule, and `SELECTION_BLUE` out of the renderer),
 `frontend/src/components/canvas/canvas-node.tsx` (it asks; the four booleans it already had are no longer folded
 into one `isActive`).
+
+## 362. The queue above the composer is a fact, not a count - and it ends with its turn
+
+**Decision** The row #315 put above the composer counts nothing. Its two queued sentences state one fact: the
+words the user just sent were taken, and they will be inserted before the next step. No number appears there in
+either language. What may move the queue the panel holds is now one function - `queueFromFrame`,
+`frontend/src/lib/canvas/agent-transcript.ts`: `steering` and `turn` state its size (#345), `done`, `error` and
+`closed` empty it, nothing else touches it - and the panel calls it once at the top of `applyEvent` instead of
+writing `setSteering` from three branches. The number itself stays where it is asked about: the cancel dialog
+still says how many words a stop would throw away (#238).
+
+**Why** One report, and one bug found by checking that report against the code.
+
+The report: 这个显示有点多余,因为所有的排队的会一次性发送过去. It is true by construction - the agent announces
+one `queued` per message and **one** `delivered` for the whole batch (`noteSteering`; #315's own copy said
+"一起插入"), so the number can never change what happens next. Every reader of it in the panel had already
+reduced it to "is there a queue": `agentRunState` tests `queued > 0`, and so does the stop button.
+
+Checking the replacement sentence is what found the bug. The old one promised insertion "在当前步骤之后" - a
+step. The `queued` state is drawn precisely when the wait has ended and the queue has not, which is #315's
+reason for that state, and the session's own comment says a queue is "messages waiting for a task that no
+longer runs" (`clearTurn`, `internal/agent/sessions.go`): the count is zeroed with the turn, silently, because
+the only frame that carries it is written when a socket opens (`routes_agent.go`). So a page that watched a
+turn end kept drawing its queue - with no stop button beside it, since the turn really had gone - while a page
+reloading at that same instant was told there was none. Two windows on one session, two answers, and the row
+asserting an insertion no longer scheduled. The anchor the copy uses now, before the next step, holds in both
+states: a running turn takes the words after its current step and before its next one, and a stop that keeps
+them (#238) makes them the next prompt.
+
+**Rejected** Taking the number out all the way down - `Event.Queued`, `Session.Queued()`, `noteSteering` and the
+page's state, all turned into a boolean. Checked before deciding, and it deletes nothing: every reader had
+already reduced the value to a yes/no, so int→bool moves a type through five files and three tests and leaves
+every function standing, while costing the one place where the count is information. Re-broadcasting the queue
+when a turn ends was the other shape of the same fix, and it is not needed either: the page already receives
+the frame that says the turn is over, and the rule to apply is already written down on the server - applying it
+is smaller than saying it twice. A short row with the explanation on hover ("已排队", the sentence in a
+`title`) went the way #315 merged two rows: nobody hovers a row whose whole job is to say nothing was lost.
+
+**Cost** A stop that keeps the queued words (#238) hands them to the agent as the next prompt, and at that
+instant the session has forgotten them along with the turn, so no window shows them until the agent says
+`queued` again in the next turn. That is what a reload was already told, which is the point: the windows agree,
+and the transcript says in its own words that the stop kept them. The count also leaves a row some of us were
+reading as progress - "2 queued" looks like work being done - and nothing replaces it there: the timer is the
+progress, and it stays.
+
+**Tested** `frontend/tests/agent-transcript.test.ts` (a new `describe`, four cases): the size is what the frame
+states, and one `delivered` empties a stated batch; a frame that mentions a queue and states no size states
+none, since `queued` is omitted at zero; the frame that opens a socket restores a queue this page never saw
+(#345) and states none for a session holding nothing; `done`, `error` and `closed` empty a queue stated as 2
+and `agentRunState` falls to `idle` with them - both halves of the regression in one assertion; and the frames
+that say nothing about the queue leave it alone. `agentRunState` keeps its signature and its own cases,
+including the count that may not go below zero, which is the same reason the number was not turned into a
+boolean there. 59 files / 707 tests, `tsc --noEmit`, the i18n (the two dictionaries still agree, and no key
+went dead), exports, decisions, comment-name and prettier gates, `make check` (510 exported declarations, all
+reachable; the Go half of this change is comments). Not watched on a screen: the sentences were checked against
+the strings and the states that draw them, not against a browser.
+
+**Where** `frontend/src/lib/canvas/agent-transcript.ts` (`queueFromFrame` - which frame moves the queue),
+`frontend/src/components/canvas/canvas-agent-panel.tsx` (`applyEvent` asks it once; `turnLines` carries no
+count), `frontend/src/i18n/locales/{zh-CN,en-US}.ts` (`workingQueued`, `steeringQueued`),
+`internal/agent/sessions.go` (`noteSteering`'s comment, re-anchored to what the number is used for).
