@@ -1,17 +1,15 @@
 import type { AgentModel } from "@/services/api/agent";
+import type { AgentModelEdit } from "@/services/api/agent-models";
 
 /**
  * The editor's side of the agent's model list.
  *
- * The list itself is AlayaCore's: `model.conf`, announced by the agent as `SM model_list` and written by
- * `:model_sync`. A canvas edits it through that command, which takes the **whole** list — so what a page
- * sends is "these models, in this order", and a model that is missing is a model that is deleted.
+ * The list is `model.conf`, and the server writes it (`internal/server/routes_models.go`). A page sends the
+ * **whole** list — "these models, in this order" — so a model that is missing is a model that is deleted.
  *
- * What a page cannot send is the part it has never been shown: `SM model_list` carries every `api_key` in
- * cleartext; the server strips them (`agent.Model`), and puts them back into the list a canvas edited
- * before AlayaCore sees it (`agent.Sessions.ModelSync`). So an existing model travels by id and the fields
- * on this screen, and a key travels only when this page has one to give: a model being created, or one
- * whose key the user has just retyped. An empty key field says nothing and changes nothing.
+ * What a page cannot send is the part it has never been shown: the `api_key`. So an existing model travels by
+ * id and the fields on this screen, and a key travels only when this page has one to give: a model being
+ * created, or one whose key the user has just retyped. An empty key field says nothing and changes nothing.
  *
  * Everything else in an entry is on the form (#249): the token caps, the three reasoning blocks as the JSON
  * they are, the response field that carries reasoning text, and whether a step's tool calls run one at a
@@ -47,24 +45,6 @@ export type ModelDraft = {
      * are one model, which is why the form has no text box and keeps whatever spelling it was handed.
      */
     inputModalities: string[] | null;
-};
-
-/** One entry of the array `:model_sync` takes, in the protocol's own field names. */
-type SyncModel = {
-    id?: number;
-    name: string;
-    protocol_type: ModelProtocol;
-    base_url: string;
-    model_name: string;
-    context_limit?: number;
-    max_tokens?: number;
-    reasoning_0?: unknown;
-    reasoning_1?: unknown;
-    reasoning_2?: unknown;
-    reasoning_field?: string;
-    serial_tool_calls?: boolean;
-    input_modalities?: string[] | null;
-    api_key?: string;
 };
 
 /**
@@ -184,21 +164,21 @@ export type ModelChange = { kind: "add"; draft: ModelDraft } | { kind: "edit"; i
  *
  * No change at all is also a delete, of everything: the list is the file, so what is not in it is gone.
  */
-export function modelSyncPayload(models: AgentModel[], change?: ModelChange): string {
+export function modelSyncPayload(models: AgentModel[], change?: ModelChange): AgentModelEdit[] {
     const kept = models.map((model) => entryOf(model));
-    if (!change) return JSON.stringify(kept);
+    if (!change) return kept;
     switch (change.kind) {
         case "add":
-            return JSON.stringify([...kept, editableOf(change.draft)]);
+            return [...kept, editableOf(change.draft)];
         case "edit":
-            return JSON.stringify(kept.map((entry) => (entry.id === change.id ? { ...entry, ...editableOf(change.draft) } : entry)));
+            return kept.map((entry) => (entry.id === change.id ? { ...entry, ...editableOf(change.draft) } : entry));
         case "delete":
-            return JSON.stringify(kept.filter((entry) => entry.id !== change.id));
+            return kept.filter((entry) => entry.id !== change.id);
     }
 }
 
-/** One model the agent announced, as this page may describe it back: only what a form would show unchanged. */
-function entryOf(model: AgentModel): SyncModel {
+/** One model the server holds, as this page may describe it back: only what a form would show unchanged. */
+function entryOf(model: AgentModel): AgentModelEdit {
     return {
         id: model.id,
         name: model.name,
@@ -209,8 +189,8 @@ function entryOf(model: AgentModel): SyncModel {
 }
 
 /** The fields the form owns. The key is one of them only when there is one to send. */
-function editableOf(draft: ModelDraft): Omit<SyncModel, "id"> {
-    const entry: Omit<SyncModel, "id"> = {
+function editableOf(draft: ModelDraft): AgentModelEdit {
+    const entry: AgentModelEdit = {
         name: draft.name.trim(),
         protocol_type: draft.protocol,
         base_url: draft.baseUrl.trim(),

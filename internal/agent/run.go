@@ -159,8 +159,8 @@ func turnStep(state *startup, frame *Frame, emit func(Event)) turnChange {
 			state.collect(kind, data)
 			emit(Event{Type: kind, Active: state.active, Level: state.level})
 		case "model_list":
-			// The whole list, restated: `model_sync` writes `model.conf` and then says what the file now
-			// holds, with the ids it has just assigned. A picker built from the startup broadcast alone
+			// The whole list, restated: `:model_load` re-reads `model.conf` and the agent then says what the
+			// file holds, with the ids it has just assigned. A picker built from the startup broadcast alone
 			// went on offering the old list — including models that had just been deleted.
 			state.collect(kind, data)
 			emit(state.event())

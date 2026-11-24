@@ -43,10 +43,10 @@ fi
 printf 'SM{"type":"session","data":{"state":"ready"}}\n'
 while IFS= read -r line; do
   case "$line" in
-    CI*'"name":"model_sync"'*)
-      if [ -n "$FAKE_SYNC_LOG" ]; then printf '%s\n' "$line" >> "$FAKE_SYNC_LOG"; fi
-      printf 'SM{"type":"model_list","data":{"models":[{"id":1,"name":"Fake / renamed","protocol_type":"openai","base_url":"http://127.0.0.1:1/v1","api_key":"secret-key-2","model_name":"m2","context_limit":2000}]}}\n'
-      printf 'CO{"command_id":"1","result":{"models":[{"id":1,"name":"Fake / renamed"}]}}\n' ;;
+    CI*'"name":"model_load"'*)
+      if [ -n "$FAKE_LOAD_LOG" ]; then printf '%s\n' "$line" >> "$FAKE_LOAD_LOG"; fi
+      printf 'SM{"type":"model_list","data":{"models":[{"id":1,"name":"Fake / reloaded","protocol_type":"openai","base_url":"http://127.0.0.1:1/v1","api_key":"secret-key-2","model_name":"m2","context_limit":2000}]}}\n'
+      printf 'CO{"command_id":"1","result":{"models":[{"id":1,"name":"Fake / reloaded"}]}}\n' ;;
     CI*'"name":"model_set"'*)
       case "$line" in
         *'"args":"2"'*)
@@ -474,7 +474,7 @@ func TestSocketRelaysTheUsersWordsOnce(t *testing.T) {
 // gets no file — and that is a fact about the name, not a flag a client sets.
 func TestSessionThatIsNotACanvasKeepsNothing(t *testing.T) {
 	server, api, _ := startMCPServer(t)
-	conn, err := comfy.DialWS(context.Background(), socketURL(server, "settings"))
+	conn, err := comfy.DialWS(context.Background(), socketURL(server, "scratch"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -491,18 +491,19 @@ func TestSessionThatIsNotACanvasKeepsNothing(t *testing.T) {
 	until(t, conn, "done")
 
 	// There is nowhere for it to go: a conversation is kept inside its canvas, and this name is not one.
-	if file, err := api.sessionFile("settings"); err == nil {
+	if file, err := api.sessionFile("scratch"); err == nil {
 		t.Fatalf("a session that is not a canvas has a conversation file: %s", file)
 	}
 }
 
-// TestASessionWithoutAConversationEndsWithItsSocket: a name with nowhere to keep a conversation keeps no
-// process either. The models editor is a form — opened and closed with its window, asked one command — so
-// closing it is the end, and nothing would ever come back for the process (#83). A canvas is the opposite,
-// and that is the rule the whole lifetime turns on (#100).
+// TestASessionWithoutAConversationEndsWithItsSocket: a name with nowhere to keep a conversation keeps no process
+// either — nothing would ever come back for it (#83). No surface in this app opens one any more (the models
+// editor used to, before #363 made it an HTTP call), so this is the rule rather than a caller: the socket takes
+// any name, and a name that is not a canvas is answered without inventing somewhere to keep anything. A canvas is
+// the opposite, and that is the rule the whole lifetime turns on (#100).
 func TestASessionWithoutAConversationEndsWithItsSocket(t *testing.T) {
 	server, _, _ := startMCPServer(t)
-	conn, err := comfy.DialWS(context.Background(), socketURL(server, "settings"))
+	conn, err := comfy.DialWS(context.Background(), socketURL(server, "scratch"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -518,8 +519,8 @@ func TestASessionWithoutAConversationEndsWithItsSocket(t *testing.T) {
 	_ = conn.Close()
 	time.Sleep(300 * time.Millisecond)
 
-	// A form that was closed is not a conversation waiting to be reopened: the next visit starts a new agent.
-	again, err := comfy.DialWS(context.Background(), socketURL(server, "settings"))
+	// A name that keeps nothing is not a conversation waiting to be reopened: the next visit starts a new agent.
+	again, err := comfy.DialWS(context.Background(), socketURL(server, "scratch"))
 	if err != nil {
 		t.Fatalf("dial again: %v", err)
 	}
@@ -579,67 +580,6 @@ func TestSocketRelaysASettingChange(t *testing.T) {
 	message, _ := seen[len(seen)-1]["message"].(string)
 	if !strings.Contains(message, "model not found: 99") {
 		t.Fatalf("messages = %v, want the agent's rejection", seen)
-	}
-}
-
-// TestModelSyncPutsBackWhatTheCanvasCannotSee is the one command whose argument the canvas cannot complete:
-// `model_sync` replaces every model in model.conf, and the list the canvas was shown has no key in it. What
-// reaches the agent has to be the entry the agent announced, with the fields the canvas edited replaced —
-// and the list the command writes is one every other session is told about, since they read the same file.
-func TestModelSyncPutsBackWhatTheCanvasCannotSee(t *testing.T) {
-	server, _ := startAgentServer(t)
-	syncLog := filepath.Join(t.TempDir(), "sync")
-	t.Setenv("FAKE_SYNC_LOG", syncLog)
-
-	editor := openSocket(t, server, canvasSession(t, server))
-	watcher := openSocket(t, server, canvasSession(t, server))
-
-	send(t, editor, map[string]any{
-		"command": "model_sync",
-		"args":    `[{"id":2,"name":"Fake / renamed","protocol_type":"openai","base_url":"http://127.0.0.1:1/v1","model_name":"m2"}]`,
-	})
-	seen := until(t, editor, "command")
-
-	// What the agent was handed: its own entry, key and all, with the name the canvas changed.
-	raw, err := os.ReadFile(syncLog)
-	if err != nil {
-		t.Fatalf("the agent received no model_sync: %v", err)
-	}
-	synced := string(raw)
-	if !strings.Contains(synced, `\"api_key\":\"secret-key-2\"`) {
-		t.Errorf("the key was not put back: %s", synced)
-	}
-	if !strings.Contains(synced, "Fake / renamed") {
-		t.Errorf("the canvas's own edit did not travel: %s", synced)
-	}
-	if strings.Contains(synced, "Fake / one") {
-		t.Errorf("a model the canvas deleted survived: %s", synced)
-	}
-
-	// The agent's restated list comes back to the canvas that edited it, without the key.
-	var restated []any
-	for _, event := range seen {
-		if event["type"] == "models" {
-			restated, _ = event["models"].([]any)
-		}
-	}
-	if len(restated) != 1 {
-		t.Fatalf("models = %v, want the list the agent restated after the sync", restated)
-	}
-	if entry, _ := restated[0].(map[string]any); entry["name"] != "Fake / renamed" || entry["hasKey"] != true {
-		t.Errorf("restated model = %v, want the renamed one with a key", entry)
-	}
-	if encoded, _ := json.Marshal(seen); strings.Contains(string(encoded), "secret-key-2") {
-		t.Errorf("the restated list carried the key: %s", encoded)
-	}
-
-	// And the other surface, whose agent read model.conf at startup, is told rather than left stale.
-	event := nextEvent(t, watcher)
-	if event["type"] != "models" {
-		t.Fatalf("the other session received %v, want the new model list", event)
-	}
-	if models, _ := event["models"].([]any); len(models) != 1 {
-		t.Errorf("the other session holds %v, want the one model that was written", event["models"])
 	}
 }
 

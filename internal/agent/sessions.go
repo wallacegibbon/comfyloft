@@ -86,6 +86,10 @@ type Session struct {
 	started   time.Time
 	announced bool
 	queued    int
+	// reloadPending remembers `:model_load` for a session that was mid-turn when the model file changed: the
+	// command is idle-only in AlayaCore, so it is sent at the end of that turn instead (see ReloadModels). It
+	// lives beside `busy` because it is a statement about that turn.
+	reloadPending bool
 
 	// pending is the tool calls waiting for the canvas to answer them, by the id the server gave them,
 	// and calls counts the ones asked so far. A tool call is a question only the page can answer, so it
@@ -515,6 +519,11 @@ func (s *Session) pump() {
 			// reopening its session, the delete route deciding — sees an idle agent.
 			s.endTurn()
 			s.publish(Event{Type: "done"})
+			// A model list was written while this turn was running, and AlayaCore would not take the command
+			// then. The agent is idle now, so this is the moment it can be told.
+			if s.takeReload() {
+				s.sendCommand("model_load")
+			}
 		}
 	}
 }
@@ -684,6 +693,52 @@ func (s *Session) Cancel(args string) error {
 		return ErrGone
 	}
 	return nil
+}
+
+// ReloadModels tells this session's agent to read `model.conf` again (`:model_load`), which is what makes a
+// write to that file reach a process that is already running: the agent reloads the list, re-resolves the
+// active model and restates `model_list`, so both the picker and the next turn's provider follow the file.
+//
+// It is the one thing the model editor still asks an agent for, and it is the only way models enter a running
+// session since AlayaCore's v19 removed `:model_sync` (its `docs/commands.md`).
+//
+// The command is idle-only there (`cmdIdle`): a session in the middle of a turn keeps the old list until that
+// turn ends, and this is remembered rather than refused, so a long generation does not lose the reload. A turn
+// that begins in the same instant as the write is the one case that can lose it — the agent answers a refusal
+// and nothing retries — and the next save is what puts it right. It reports whether the command went out now.
+func (s *Session) ReloadModels() bool {
+	s.busyMu.Lock()
+	if s.busy {
+		s.reloadPending = true
+		s.busyMu.Unlock()
+		return false
+	}
+	s.busyMu.Unlock()
+	s.sendCommand("model_load")
+	return true
+}
+
+// takeReload reports whether a reload was asked for while a turn was running, clearing the flag.
+func (s *Session) takeReload() bool {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	pending := s.reloadPending
+	s.reloadPending = false
+	return pending
+}
+
+// sendCommand writes one command that is not a turn — no prompt, so nothing is running and no turn is opened.
+//
+// An error is dropped on purpose: the only caller is a server-wide notice, and a process that is gone says so
+// through its own pump, which is what releases the session.
+func (s *Session) sendCommand(name string) {
+	payload, err := json.Marshal(map[string]string{"command_id": commandID, "name": name, "args": ""})
+	if err != nil {
+		return
+	}
+	s.write.Lock()
+	defer s.write.Unlock()
+	_ = s.proc.Write(TagCmdInput, string(payload))
 }
 
 func newSessionID() string {

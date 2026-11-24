@@ -37,8 +37,8 @@ import (
  *
  * **The list is the file.** A page sends back the whole list it is looking at, in its order, with one entry
  * added, changed or removed; an entry that is missing is a profile that was deleted. That is one write, one
- * atomic rename and one answer, and it leaves no room for a half-applied edit — the same rule `model_sync`
- * takes for the agent's models.
+ * atomic rename and one answer, and it leaves no room for a half-applied edit — the same rule the agent's
+ * `model.conf` takes, and the same shape its route has (`internal/server/routes_models.go`, #363).
  *
  * **The key travels with its entry.** A page is never shown one, so an entry that arrives without a `key`
  * field says nothing about the stored one and keeps it; `""` removes it. `Set`-by-id was not needed: the list

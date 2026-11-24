@@ -125,19 +125,6 @@ func TestRedactKeysKeepsTheShape(t *testing.T) {
 	}
 }
 
-// :model_sync's argument is the whole model list as a JSON string, so the keys inside it are escaped — and a
-// list edited from the canvas carries keys, because the server puts back the ones the canvas cannot see.
-func TestRedactKeysReachesInsideAnArgument(t *testing.T) {
-	frame := `{"args":"[{\"api_key\":\"sk-secret\",\"base_url\":\"http://h/v1\",\"name\":\"A\"}]"}`
-	got := redactKeys(frame)
-	if strings.Contains(got, "sk-secret") {
-		t.Errorf("a key survived redaction inside an argument: %s", got)
-	}
-	if !strings.Contains(got, `\"api_key\":\"***\"`) || !strings.Contains(got, `\"name\":\"A\"`) {
-		t.Errorf("the field or its neighbours were lost: %s", got)
-	}
-}
-
 // The streaming plane is noise in a transcript; the frames around it say what happened.
 func TestDeltaFramesAreNotLogged(t *testing.T) {
 	for tag, want := range map[string]bool{

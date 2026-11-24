@@ -214,14 +214,8 @@ func isDelta(tag string) bool {
 // from model.conf in cleartext; the transcript is worth having, the keys in it are not.
 var reAPIKey = regexp.MustCompile(`("api_key":\s*)"(?:[^"\\]|\\.)*"`)
 
-// reEscapedAPIKey is the same field one quote deeper: `:model_sync`'s argument is the whole model list as a
-// JSON *string*, so the keys in it are escaped (`\"api_key\":\"sk-…\"`) and the pattern above — which is
-// written for a field of the frame — walks past them. A model list edited from the canvas is written to
-// AlayaCore through that frame, keys included, so this is the one place a key would reach the transcript.
-var reEscapedAPIKey = regexp.MustCompile(`\\"api_key\\":\\"(?:[^"\\]|\\\\.)*\\"`)
-
 func redactKeys(value string) string {
-	return reAPIKey.ReplaceAllString(reEscapedAPIKey.ReplaceAllString(value, `\"api_key\":\"***\"`), `$1"***"`)
+	return reAPIKey.ReplaceAllString(value, `$1"***"`)
 }
 
 // truncateFrame keeps a frame's head. A rewrite of an H3 prompt is thousands of characters and is not

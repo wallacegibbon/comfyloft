@@ -12,4 +12,7 @@ import (
 // carries its own preview frame and step count — there is nothing else here to route.
 func (s *Server) routesGeneration(mux *http.ServeMux) {
 	s.routesAgent(mux)
+	// The agent's models are a file the preferences window reads and writes, not a session: the editor works
+	// when no agent does, which is the case it is for (`routes_models.go`).
+	s.routesModels(mux)
 }

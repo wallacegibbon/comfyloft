@@ -1,17 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 /**
- * The list a canvas hands the agent to edit its models.
+ * The list a canvas writes back into `model.conf`.
  *
- * `:model_sync` replaces every model in `model.conf` from what it is given, so this array *is* the file: a
- * model it leaves out is deleted, and a field it does not say is a field the server has to put back from
- * the entry the agent announced. These tests pin the bargain in both directions — what travels for a model
- * that exists (its four visible fields, and a key only when this page has one to give), and what travels
- * for one that is being created (everything, and nothing invented).
+ * The whole list is the file: a model it leaves out is deleted, and a field it does not say is a field the
+ * server keeps from the file. These tests pin the bargain in both directions — what travels for a model that
+ * exists (the fields on this screen, and a key only when this page has one to give), and what travels for one
+ * that is being created (everything, and nothing invented).
  */
 const { emptyModelDraft, modelDraftComplete, modelDraftOf, modelSyncPayload, reasoningError, withModality } = await import("@/lib/agent-models");
 
-const model = (overrides: Partial<Parameters<typeof modelSyncPayload>[0][number]> = {}) => ({
+const model = (overrides: Partial<Parameters<typeof modelSyncPayload>[0][number]> = {}): Parameters<typeof modelSyncPayload>[0][number] => ({
     id: 1,
     name: "DeepSeek / Flash",
     protocolType: "openai",
@@ -34,7 +33,7 @@ const draftOf = (overrides: Partial<typeof model> = {}) => modelDraftOf(model(ov
 
 describe("modelSyncPayload", () => {
     it("sends every model on screen, by id, and never a key", () => {
-        const payload = JSON.parse(modelSyncPayload([model(), model({ id: 2, name: "Qwen", modelName: "qwen3.8-27b", protocolType: "anthropic" })]));
+        const payload = modelSyncPayload([model(), model({ id: 2, name: "Qwen", modelName: "qwen3.8-27b", protocolType: "anthropic" })]);
 
         expect(payload).toEqual([
             { id: 1, name: "DeepSeek / Flash", protocol_type: "openai", base_url: "https://api.deepseek.com", model_name: "deepseek-flash" },
@@ -45,14 +44,14 @@ describe("modelSyncPayload", () => {
     });
 
     it("leaves out a model that was deleted, which is the whole of a delete", () => {
-        const payload = JSON.parse(modelSyncPayload([model(), model({ id: 2 })], { kind: "delete", id: 2 }));
+        const payload = modelSyncPayload([model(), model({ id: 2 })], { kind: "delete", id: 2 });
 
-        expect(payload.map((entry: { id: number }) => entry.id)).toEqual([1]);
+        expect(payload.map((entry) => entry.id)).toEqual([1]);
     });
 
     it("adds the draft after the models that are already there, key and all", () => {
         const change = { kind: "add" as const, draft: { ...emptyModelDraft, name: "  New / Claude ", modelId: " claude-haiku-4 ", baseUrl: " https://api.anthropic.com ", protocol: "anthropic" as const, apiKey: " sk-new " } };
-        const payload = JSON.parse(modelSyncPayload([model()], change));
+        const payload = modelSyncPayload([model()], change);
 
         expect(payload).toHaveLength(2);
         expect(payload[1]).toMatchObject({ name: "New / Claude", protocol_type: "anthropic", base_url: "https://api.anthropic.com", model_name: "claude-haiku-4", api_key: "sk-new" });
@@ -61,13 +60,13 @@ describe("modelSyncPayload", () => {
     });
 
     it("leaves the key out of a new model that has none, rather than sending an empty one", () => {
-        const payload = JSON.parse(modelSyncPayload([], { kind: "add", draft: { ...emptyModelDraft, name: "Local", modelId: "qwen", baseUrl: "http://127.0.0.1:9999/v1" } }));
+        const payload = modelSyncPayload([], { kind: "add", draft: { ...emptyModelDraft, name: "Local", modelId: "qwen", baseUrl: "http://127.0.0.1:9999/v1" } });
 
         expect(payload[0]).not.toHaveProperty("api_key");
     });
 
     it("changes a model in the place it stands, and keeps its id", () => {
-        const payload = JSON.parse(modelSyncPayload([model(), model({ id: 2 })], { kind: "edit", id: 2, draft: { ...modelDraftOf(model()), name: "Renamed", apiKey: "" } }));
+        const payload = modelSyncPayload([model(), model({ id: 2 })], { kind: "edit", id: 2, draft: { ...modelDraftOf(model()), name: "Renamed", apiKey: "" } });
 
         expect(payload).toHaveLength(2);
         expect(payload[1]).toMatchObject({ id: 2, name: "Renamed" });
@@ -76,13 +75,13 @@ describe("modelSyncPayload", () => {
     });
 
     it("sends a key that was retyped, which is how one is rotated", () => {
-        const payload = JSON.parse(modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...modelDraftOf(model()), apiKey: "sk-rotated" } }));
+        const payload = modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...modelDraftOf(model()), apiKey: "sk-rotated" } });
 
         expect(payload[0]).toMatchObject({ id: 1, name: "DeepSeek / Flash", api_key: "sk-rotated" });
     });
 
     it("reads an unknown protocol as the one every provider speaks", () => {
-        const payload = JSON.parse(modelSyncPayload([model({ protocolType: undefined })]));
+        const payload = modelSyncPayload([model({ protocolType: undefined })]);
 
         expect(payload[0].protocol_type).toBe("openai");
     });
@@ -111,13 +110,11 @@ describe("modelDraftOf", () => {
 
 describe("the rest of a model's entry, as the form edits it", () => {
     it("sends the token caps, the blocks, the reasoning field and the tool-call mode", () => {
-        const payload = JSON.parse(
-            modelSyncPayload([model()], {
-                kind: "edit",
-                id: 1,
-                draft: { ...draftOf(), contextLimit: "200000", maxTokens: "8192", reasoningField: "reasoning_text", serialToolCalls: false, reasoning0: `{"thinking":{"type":"disabled"}}` },
-            }),
-        );
+        const payload = modelSyncPayload([model()], {
+            kind: "edit",
+            id: 1,
+            draft: { ...draftOf(), contextLimit: "200000", maxTokens: "8192", reasoningField: "reasoning_text", serialToolCalls: false, reasoning0: `{"thinking":{"type":"disabled"}}` },
+        });
 
         expect(payload[0]).toMatchObject({
             context_limit: 200000,
@@ -133,19 +130,19 @@ describe("the rest of a model's entry, as the form edits it", () => {
     // A cleared box is an answer, where an empty key field is a silence: the form showed the block, so
     // emptying it removes it, and `null` is how that is said.
     it("sends null for a block the user cleared", () => {
-        const payload = JSON.parse(modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), reasoning2: "   " } }));
+        const payload = modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), reasoning2: "   " } });
 
         expect(payload[0].reasoning_2).toBeNull();
     });
 
     it("sends an empty reasoning field as nothing, so the provider's default stands", () => {
-        const payload = JSON.parse(modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), reasoningField: "  " } }));
+        const payload = modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), reasoningField: "  " } });
 
         expect(payload[0]).not.toHaveProperty("reasoning_field");
     });
 
     it('counts a cleared token cap as the zero model.conf writes for "not set"', () => {
-        const payload = JSON.parse(modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), contextLimit: "", maxTokens: "abc" } }));
+        const payload = modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), contextLimit: "", maxTokens: "abc" } });
 
         expect(payload[0]).toMatchObject({ context_limit: 0, max_tokens: 0 });
     });
@@ -162,23 +159,23 @@ describe("the input types a model declares", () => {
     });
 
     it("sends the switch, off, as null — the one thing that removes the line", () => {
-        const payload = JSON.parse(modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), inputModalities: null } }));
+        const payload = modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), inputModalities: null } });
 
         expect(payload[0]).toHaveProperty("input_modalities", null);
     });
 
     it("sends a list and an empty declaration as themselves", () => {
-        const list = JSON.parse(modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), inputModalities: ["image", "document"] } }));
+        const list = modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), inputModalities: ["image", "document"] } });
         expect(list[0].input_modalities).toEqual(["image", "document"]);
 
-        const none = JSON.parse(modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), inputModalities: [] } }));
+        const none = modelSyncPayload([model()], { kind: "edit", id: 1, draft: { ...draftOf(), inputModalities: [] } });
         expect(none[0].input_modalities).toEqual([]);
     });
 
     // Only the edited model's list travels: the others the page never opened keep what the server holds, which
     // is where an `api_key` and a declaration it was not shown come from.
     it("says nothing about a model the form did not open", () => {
-        const payload = JSON.parse(modelSyncPayload([model(), model({ id: 2 })], { kind: "delete", id: 2 }));
+        const payload = modelSyncPayload([model(), model({ id: 2 })], { kind: "delete", id: 2 });
 
         expect(payload[0]).not.toHaveProperty("input_modalities");
     });

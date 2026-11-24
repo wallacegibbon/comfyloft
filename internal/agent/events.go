@@ -102,10 +102,9 @@ type Event struct {
 // Model is what a canvas is told about one of the agent's models: enough to show it in a picker and to
 // name it in a URL, and nothing else.
 //
-// `SM model_list` carries the whole `model.conf` entry in cleartext — the `api_key` above all, then the
-// `reasoning_N` blocks and the token caps. None of that travels: `HasKey` says a key is stored without
-// saying what it is, and the entry itself stays in the server (`modelObject`), which is where the list a
-// canvas edits is completed from (#75: the surface edits models, the key never leaves the adapter).
+// `SM model_list` carries the whole `model.conf` entry in cleartext, the `api_key` above all. That field
+// does not travel: `HasKey` says a key is stored without saying what it is (#75: the surface edits models,
+// the key never leaves the adapter). The rest is what a form edits, so it does travel (`#249`, `#256`).
 type Model struct {
 	ID           int    `json:"id"`
 	Name         string `json:"name"`
@@ -129,105 +128,62 @@ type Model struct {
 	// The input modalities this model declares, exactly as `model.conf` holds them: nil is "not declared"
 	// — the protocol decides what it is sent — and an empty list is a declaration too, meaning no media
 	// at all. Always stated, never omitted, for the reason `serialToolCalls` is: `[]` travelling as an
-	// absent field would come back through `model_sync` as an unrestricted model, which is a silent
-	// widening of the file (#256).
+	// absent field would read as "not declared", which is a model the protocol sends media to — the opposite
+	// of what the file says (#256).
 	InputModalities []string `json:"inputModalities"`
 }
 
-// modelObject is one entry of `SM model_list`, exactly as the agent sent it.
+// modelEntry is one entry of `SM model_list`, in the protocol's own field names — the snake_case of
+// `model.conf`, which is what the agent states, as opposed to the camelCase `Model` a canvas is given.
 //
-// Kept whole, because `model_sync` takes the *whole list back* and AlayaCore writes `model.conf` from it:
-// any field the server did not keep is a field one edit silently deletes — the `api_key` first of all,
-// then every `reasoning_N` block and token cap that no control in the canvas reaches. Holding the object
-// as it arrived means the server does not know those fields by name, so a field AlayaCore adds tomorrow
-// survives a round trip through a page that never heard of it.
-//
-// Values stay `json.RawMessage`: the ones that travel back must travel untouched. The server reads the
-// few a canvas is shown (`info`) and replaces the four an editor owns (`mergeModelSync`).
-type modelObject map[string]json.RawMessage
+// The key is read only to answer `hasKey`. Nothing keeps it: no canvas and no server path writes a model list
+// back over the wire any more (the list is `model.conf`, read and written by `internal/agentconf`), so a key
+// held in this process would be a secret kept for no reason (#75).
+type modelEntry struct {
+	ID              int             `json:"id"`
+	Name            string          `json:"name"`
+	ProtocolType    string          `json:"protocol_type"`
+	BaseURL         string          `json:"base_url"`
+	APIKey          string          `json:"api_key"`
+	ModelName       string          `json:"model_name"`
+	ContextLimit    int             `json:"context_limit"`
+	MaxTokens       int             `json:"max_tokens"`
+	Reasoning0      json.RawMessage `json:"reasoning_0"`
+	Reasoning1      json.RawMessage `json:"reasoning_1"`
+	Reasoning2      json.RawMessage `json:"reasoning_2"`
+	ReasoningField  string          `json:"reasoning_field"`
+	SerialToolCalls bool            `json:"serial_tool_calls"`
+	InputModalities []string        `json:"input_modalities"`
+}
 
-// info is the part of an entry a canvas is shown.
-func (o modelObject) info() Model {
+// model is this entry as a canvas is shown it: every field of the entry except the key, and `hasKey` in its
+// place.
+func (e modelEntry) model() Model {
 	return Model{
-		ID:              o.number("id"),
-		Name:            o.text("name"),
-		ProtocolType:    o.text("protocol_type"),
-		BaseURL:         o.text("base_url"),
-		ModelName:       o.text("model_name"),
-		ContextLimit:    o.number("context_limit"),
-		HasKey:          o.text("api_key") != "",
-		MaxTokens:       o.number("max_tokens"),
-		Reasoning0:      o.raw("reasoning_0"),
-		Reasoning1:      o.raw("reasoning_1"),
-		Reasoning2:      o.raw("reasoning_2"),
-		ReasoningField:  o.text("reasoning_field"),
-		SerialToolCalls: o.boolean("serial_tool_calls"),
-		InputModalities: o.list("input_modalities"),
+		ID:              e.ID,
+		Name:            e.Name,
+		ProtocolType:    e.ProtocolType,
+		BaseURL:         e.BaseURL,
+		ModelName:       e.ModelName,
+		ContextLimit:    e.ContextLimit,
+		HasKey:          e.APIKey != "",
+		MaxTokens:       e.MaxTokens,
+		Reasoning0:      rawOrNil(e.Reasoning0),
+		Reasoning1:      rawOrNil(e.Reasoning1),
+		Reasoning2:      rawOrNil(e.Reasoning2),
+		ReasoningField:  e.ReasoningField,
+		SerialToolCalls: e.SerialToolCalls,
+		InputModalities: e.InputModalities,
 	}
 }
 
-// list is one array-of-strings field as it arrived, or nil for a field that is absent, JSON `null`, or
-// something that is not an array of strings.
-//
-// Nil and empty are deliberately kept apart here, because they are kept apart everywhere else: an absent
-// key means "not declared, the protocol decides", while `[]` means "declared, and it takes no media". The
-// decode of `[]` into a nil slice yields an empty non-nil one, which is what makes the distinction survive
-// without a pointer or a second boolean.
-func (o modelObject) list(field string) []string {
-	var values []string
-	if raw, ok := o[field]; ok && len(raw) > 0 {
-		_ = json.Unmarshal(raw, &values)
-	}
-	return values
-}
-
-// raw is one field exactly as it arrived, or nil for a field that is absent or JSON `null`.
-//
-// Nil rather than the four bytes of `null`: a reasoning block that is not there and one that is written as
-// `null` are the same thing to AlayaCore (it merges a value only when it has length), and one of them should
-// not appear in a page's JSON as something to edit.
-func (o modelObject) raw(field string) json.RawMessage {
-	value, ok := o[field]
-	if !ok || len(value) == 0 || string(value) == "null" {
+// rawOrNil is one block as it arrived, or nil for a block that is absent or written as `null`: both mean "no
+// block", and a page that shows one should not be offered the four characters of the other to edit.
+func rawOrNil(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
-	return value
-}
-
-// boolean is one boolean field, or false for a field that is absent or not a boolean.
-func (o modelObject) boolean(field string) bool {
-	var value bool
-	if raw, ok := o[field]; ok {
-		_ = json.Unmarshal(raw, &value)
-	}
-	return value
-}
-
-// text is one string field, or "" for a field that is absent or not a string.
-func (o modelObject) text(field string) string {
-	var value string
-	if raw, ok := o[field]; ok {
-		_ = json.Unmarshal(raw, &value)
-	}
-	return value
-}
-
-// number is one numeric field, or 0 for a field that is absent or not a number.
-func (o modelObject) number(field string) int {
-	var value int
-	if raw, ok := o[field]; ok {
-		_ = json.Unmarshal(raw, &value)
-	}
-	return value
-}
-
-// clone is this entry as something that may be changed without touching the copy the session keeps.
-func (o modelObject) clone() modelObject {
-	copied := make(modelObject, len(o))
-	for field, raw := range o {
-		copied[field] = raw
-	}
-	return copied
+	return raw
 }
 
 // Startup is the model information the agent broadcasts before it accepts input.
@@ -236,7 +192,7 @@ type Startup = startup
 // startup is the model information the agent broadcasts before it accepts input, and the telemetry that
 // comes with it: a session started on a file announces the context it restored before it says `ready`.
 type startup struct {
-	models         []modelObject
+	models         []Model
 	active         *Model
 	level          *int
 	coreVersion    string
@@ -248,12 +204,16 @@ func (s *startup) collect(kind string, data json.RawMessage) {
 	switch kind {
 	case "model_list":
 		var payload struct {
-			Models []modelObject `json:"models"`
+			Models []modelEntry `json:"models"`
 		}
 		if json.Unmarshal(data, &payload) != nil {
 			return
 		}
-		s.models = payload.Models
+		models := make([]Model, 0, len(payload.Models))
+		for _, entry := range payload.Models {
+			models = append(models, entry.model())
+		}
+		s.models = models
 	case "model":
 		var payload struct {
 			ActiveID     int    `json:"active_id"`
@@ -292,15 +252,11 @@ func (s *startup) collect(kind string, data json.RawMessage) {
 // event is this state as a canvas draws it.
 //
 // The active model's limit comes out of the list when the list holds its entry: the limit is the entry's, and the
-// entry is what an editor rewrites — `model_sync` restates the list, while the `model` frame that named the active
-// model is not sent again. A session whose list does not name its model keeps the stated limit, which is the only
-// account of it there is (#347).
+// entry is what an editor rewrites — `:model_load` restates the list, while the `model` frame that named the
+// active model is not sent again. A session whose list does not name its model keeps the stated limit, which is
+// the only account of it there is (#347).
 func (s *startup) event() Event {
-	models := make([]Model, 0, len(s.models))
-	for _, object := range s.models {
-		models = append(models, object.info())
-	}
-	event := Event{Type: "models", Models: models, Active: s.activeModel(), Level: s.level, CoreVersion: s.coreVersion, MessageVersion: s.messageVersion}
+	event := Event{Type: "models", Models: s.models, Active: s.activeModel(), Level: s.level, CoreVersion: s.coreVersion, MessageVersion: s.messageVersion}
 	if s.usage != nil {
 		event.ContextTokens = s.usage.contextTokens
 		event.StepTps = s.usage.stepTps
@@ -319,12 +275,12 @@ func (s *startup) activeModel() *Model {
 	if s.active == nil {
 		return nil
 	}
-	entry := s.modelByID(s.active.ID)
-	if entry == nil {
+	index := s.modelIndex(s.active.ID)
+	if index < 0 {
 		return s.active
 	}
 	active := *s.active
-	active.ContextLimit = entry.number("context_limit")
+	active.ContextLimit = s.models[index].ContextLimit
 	return &active
 }
 
@@ -343,11 +299,11 @@ func (s *startup) destination() string {
 	if s.active == nil {
 		return ""
 	}
-	entry := s.modelByID(s.active.ID)
-	if entry == nil {
+	index := s.modelIndex(s.active.ID)
+	if index < 0 {
 		return fmt.Sprintf("%q (its entry is not in the list)", s.active.Name)
 	}
-	info := entry.info()
+	info := s.models[index]
 	parts := []string{info.BaseURL}
 	if info.ModelName != "" {
 		parts = append(parts, "model "+info.ModelName)
@@ -358,15 +314,15 @@ func (s *startup) destination() string {
 	return fmt.Sprintf("%q -> %s", info.Name, strings.Join(parts, ", "))
 }
 
-// modelByID is the entry with this id, or nil. Ids are positions (`model.conf` order, restated by every
-// `SM model_list`), which is what makes them the handle a canvas may send back.
-func (s *startup) modelByID(id int) modelObject {
-	for _, object := range s.models {
-		if object.number("id") == id {
-			return object
+// modelIndex is the position of the entry with this id, or -1. Ids are positions (`model.conf` order,
+// restated by every `SM model_list`), which is what makes them the handle a canvas may send back.
+func (s *startup) modelIndex(id int) int {
+	for index, model := range s.models {
+		if model.ID == id {
+			return index
 		}
 	}
-	return nil
+	return -1
 }
 
 // systemMessage is the SM envelope: {"type":...,"data":{...}}.

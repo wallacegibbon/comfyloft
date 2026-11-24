@@ -463,7 +463,7 @@ func TestMCPOneStaticConfigServesEverySession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read mcp.conf: %v", err)
 	}
-	for _, want := range []string{"server: canvas", "comfyloft-mcp", "proto-version: " + mcpProtocolVersion} {
+	for _, want := range []string{`server: "canvas"`, "comfyloft-mcp", `proto-version: "` + mcpProtocolVersion + `"`} {
 		if !strings.Contains(string(written), want) {
 			t.Fatalf("mcp.conf = %q, want it to contain %q", written, want)
 		}

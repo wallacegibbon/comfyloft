@@ -224,12 +224,15 @@ back what AlayaCore says. The server owns no wording, no model choice and no sta
 | -------- | ------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `GET`    | `/api/agent/socket/{session}`  | One agent process, named by the client, both directions. A canvas's conversation is kept inside it. |
 | `DELETE` | `/api/agent/session/{session}` | Forget a conversation: releases the process and removes the file. Idempotent. |
+| `GET`    | `/api/agent/models`            | The agent's models, read from `model.conf`: `{models: [{id, name, protocolType, baseUrl, modelName, contextLimit, maxTokens, reasoning0-2, reasoningField, serialToolCalls, inputModalities, hasKey}], problems}`, never a key. No agent process is needed (decisions #363). |
+| `PUT`    | `/api/agent/models`            | Write the whole list — the page's order, so a missing model is a deleted one. An entry without an `api_key` keeps the stored one; `null` removes a reasoning block or the modality declaration. The file is written, then every idle agent is told to re-read it. |
 | `POST`   | `/mcp` (own listener)          | The agent's tools, reached through `comfyloft-mcp`. Loopback only — never the address above.      |
 
 A session is one `alayacore --rawio` process with one socket, filed under a name the **client** chooses:
-the canvas agent panel calls its own `canvas:<canvasId>`, and the models editor calls `settings`. That
-prefix is the only thing the server reads about a name — it never learns what a node is, and it does not
-care which canvas a name points at beyond where the file goes.
+the canvas agent panel calls its own `canvas:<canvasId>`. That prefix is the only thing the server reads
+about a name — it never learns what a node is, and it does not care which canvas a name points at beyond
+where the file goes. Editing the models is not a session: the list is a file (`model.conf`) and the server
+writes it, so the editor works when no agent can start.
 
 A canvas's name also owns a **conversation file**: `<CANVAS_ROOT>/<id>/session.alaya`, passed to AlayaCore
 as `--session`. That file, not the process, is what outlives a process, and it is part of the canvas —
@@ -288,13 +291,11 @@ when the list names the model, because the limit is the entry's and an editor ca
 `done` marks the end of a turn and carries the elapsed time only: the answer is what the deltas built,
 and a second copy of it would be a second truth.
 
-`{"command":"model_sync","args":…}` is the one command the server rewrites on the way in. It carries the
-whole model list, and AlayaCore replaces every model in `model.conf` from it — while the list a canvas is
-shown is `agent.Model`, which has no `api_key` in it (`hasKey` says there is one). Sent as it stands, one
-deleted model would take every key on the machine with it. So the server rebuilds each model it knows from
-the entry the agent announced, replaces only the four fields a canvas can see, and takes a key only when the
-canvas had one to send; it then hands the list it is about to write to every other live session, because
-they all read the one file at startup (decisions #201).
+A model list is not a command any more: AlayaCore's wire version 19 removed `:model_sync`, so the list is
+`model.conf` and the server writes it (`GET`/`PUT /api/agent/models`, decisions #363). What the wire carries
+instead is `model_load`, which the server sends to every live session after a write — the only way a model
+list enters a process that is already running. A session in the middle of a turn is sent it when that turn
+ends, because the command is idle-only.
 
 A second connection to the same name takes the session over: the newcomer gets the model list and every
 frame, and the connection it replaced is told `closed`. One session still has one set of eyes — two
@@ -482,9 +483,10 @@ by the agent's own `model.conf` and its `reasoning_0/1/2` blocks. Nothing here c
 negotiates a thinking parameter or retries a rejected field: AlayaCore does, and the server relays
 what it says.
 
-That list is also edited from the canvas, and still by the agent: the preferences window lists the models,
-and adding, changing or removing one sends `model_sync` — the same command, with the server completing the
-entries the page was not shown (decisions #201). Nothing here parses `model.conf`.
+That list is also edited from the canvas, and the server is what edits it: the preferences window lists the
+models, and adding, changing or removing one puts the whole list back, which the server writes into
+`model.conf` and then has every live agent re-read (decisions #363). The format belongs to AlayaCore and the
+one copy of it here is `internal/agentconf`; the page never sees a key, and never has to.
 
 The form covers the entry rather than a corner of it (#249): the name, the model id, the address, the
 protocol, the key, `context_limit`, `max_tokens`, `reasoning_field`, `serial_tool_calls` and the three
@@ -501,11 +503,11 @@ Switching on starts empty rather than pre-ticked, because the two mistakes cost 
 endpoint does not accept fails the whole request, every time, since the part is in the conversation the agent
 keeps replaying, while one it would have accepted is only replaced by a note saying it was not delivered.
 
-A core older than this option neither reports the line nor keeps it: `model_sync` re-formats `model.conf`
-from the model struct the process holds, so an agent started before AlayaCore was upgraded announces
-`inputModalities: null` for a model whose file declares one and drops the line on the next edit. Measured
-against the pre-upgrade build: a rename through it wrote the file without `input_modalities`. Restarting the
-server is what fixes it — the agent processes are spawned per session, so a new one is the new core.
+A core older than this option does not report the line in its `model_list`, so a page shows
+`inputModalities: null` for a model whose file declares one — and the editor's own status is the file, which
+still has the line: the entry on screen carries what the file says (`internal/agentconf`), and a save writes
+it back. Restarting the server is what fixes the agent's side of it — the agent processes are spawned per
+session, so a new one is the new core.
 
 **Where a turn goes is in the log** (#255). A `model` frame carries the id and the name of the active model and
 nothing else, so the address is looked up in the list the agent announced and printed with it:
@@ -540,6 +542,7 @@ internal/store           main-model overrides, speech profiles
 internal/settings        the preferences document, opaque to the server
 internal/sysinfo         ComfyUI's /system_stats, as the panel's units
 internal/agent           spawning AlayaCore, its event whitelist, models, notices
+internal/agentconf       model.conf and mcp.conf: the syntax, in both directions
 internal/logx            structured log lines with request ids
 internal/util            the few helpers that are not any one package's business
 internal/server          route table and wiring
@@ -549,8 +552,8 @@ Four design notes worth knowing before changing anything:
 
 - **The agent is relayed, not modelled.** `internal/agent` writes a user message as the wire's own content items
   and a flush, relays the frames that come back, and keeps only what AlayaCore cannot say twice — the
-  conversation's frames, its startup broadcast, the model entries `model_sync` has to round-trip — plus the
-  routing for one socket and one tool call. It keeps no opinion about what the agent is doing: the turn in flight
+  conversation's frames, its startup broadcast, the model list a picker is drawn from — plus the routing for
+  one socket and one tool call. It keeps no opinion about what the agent is doing: the turn in flight
   comes off the agent's own task frame, the models off its `model_list`, a failure off its `error`. A fact this
   side derives is a second truth that only the agent can correct, and its failures are invisible in proportion to
   how rare they are (#343, and #342 for the turn).

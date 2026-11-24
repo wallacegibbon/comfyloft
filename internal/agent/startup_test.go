@@ -91,7 +91,7 @@ func TestDestinationNamesTheAddressTheActiveModelIsSentTo(t *testing.T) {
 	}
 }
 
-// The active model's limit comes out of the list, because the list is what an editor rewrites: `model_sync`
+// The active model's limit comes out of the list, because the list is what an editor rewrites: `:model_load`
 // restates it, and the `model` frame that named the active model is not sent again — to this session or to any
 // other one. A limit copied out of that frame is a denominator nobody can correct, and the panel would keep
 // drawing `22K/262144` for a model that now holds half of it (#347).

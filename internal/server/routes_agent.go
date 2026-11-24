@@ -15,10 +15,13 @@ import (
 
 // routesAgent registers the agent routes.
 //
-// A session is one agent process with one name, and the name is the client's — the canvas panel calls
-// its own `canvas:<canvasId>`, and the models editor calls `settings`. The client owns the lifetime,
-// because the client is what knows when a surface went away. The server only files processes under
-// names, and keeps the conversation that has somewhere to go — a canvas's — inside that canvas.
+// A session is one agent process with one name, and the name is the client's — the canvas panel calls its own
+// `canvas:<canvasId>`. The client owns the lifetime, because the client is what knows when a surface went
+// away. The server only files processes under names, and keeps the conversation that has somewhere to go — a
+// canvas's — inside that canvas.
+//
+// Nothing here edits the agent's configuration: the model list is a file, read and written by
+// `routes_models.go`, and `:model_load` is what tells a running agent to read it again.
 func (s *Server) routesAgent(mux *http.ServeMux) {
 	s.route(mux, "GET /api/agent/socket/{session}", s.handleAgentSocket)
 	s.route(mux, "DELETE /api/agent/session/{session}", s.handleAgentSessionDelete)
@@ -134,8 +137,8 @@ func (s *Server) handleAgentSocket(ctx *httpx.Ctx) error {
 	}
 
 	// Where a conversation is kept is the name's business, not the client's: a canvas keeps one inside itself,
-	// and a name that is not a canvas keeps nothing (the models editor is a form, not a dialogue). File
-	// processes under names — do not teach it which names mean what.
+	// and a name that is not a canvas keeps nothing. File processes under names — do not teach it which names
+	// mean what.
 	options, err := s.agentOptionsFor(id)
 	if err != nil {
 		if s.logger != nil {
@@ -162,9 +165,9 @@ func (s *Server) handleAgentSocket(ctx *httpx.Ctx) error {
 	// transcript for the page that comes back. Ending it is an act, not an accident: `close` on this socket,
 	// the delete route, or the canvas being deleted.
 	//
-	// Except for a name with nowhere to put a conversation: the models editor is a form, opened and closed
-	// with its window (#83), and nothing would ever come back to its process because there is nothing to come
-	// back to. The canvas is the surface that outlives its socket, and it is the one that keeps a file.
+	// Except for a name with nowhere to put a conversation: nothing in this app opens one any more, and a name
+	// that keeps nothing (#83) has no process worth holding, because there is no conversation to come back to.
+	// The canvas is the surface that outlives its socket, and it is the one that keeps a file.
 	defer func() {
 		if !stopWatching() {
 			return // a newer connection reads this session now, and the ending is not ours to decide
@@ -242,18 +245,6 @@ func (s *Server) readSocket(conn *ws.Conn, session *agent.Session, send func(age
 			}
 		default:
 			request := agent.Request{Prompt: message.Prompt, Images: message.Images, Command: message.Command, Args: message.Args}
-			// A model list is the one argument the canvas cannot make complete on its own (see
-			// `agent.Sessions.ModelSync`): it may edit the four fields it can see, and the server puts back
-			// the key and the reasoning blocks it cannot — for the whole list, since `model_sync` replaces
-			// every model in the file.
-			if request.Command == "model_sync" {
-				completed, err := s.agentSessions.ModelSync(session, request.Args)
-				if err != nil {
-					_ = send(agent.Event{Type: "error", Message: err.Error()})
-					continue
-				}
-				request.Args = completed
-			}
 			if s.logger != nil {
 				s.logger.Info("agent: socket in session=%s command=%q prompt=%q images=%d", session.ID, request.Command, truncateText(request.Prompt, 120), len(request.Images))
 			}

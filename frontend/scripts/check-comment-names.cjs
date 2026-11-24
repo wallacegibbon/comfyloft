@@ -50,6 +50,14 @@ const OUTSIDE = {
     "frontend/tests/agent-usage.test.ts": ["formatTokenCount"], // the same, named where the mirror is tested
     "frontend/src/lib/canvas/canvas-node-geometry.ts": ["snapNodesIntoGroup"], // a whole-gesture rule #339 deleted; the comment says it is gone
     "frontend/src/i18n/index.ts": ["languageChanged"], // i18next's own event, which use-settings-store really listens for
+    // `model.conf` is read and written in Go now (`internal/agentconf`), and every name those comments cite is
+    // AlayaCore's own: the parser and formatter the format belongs to, and the struct whose tags are the fields.
+    "internal/agentconf/agentconf.go": ["claimKey", "validKeyPattern", "escapeQuotedStr"], // internal/config there
+    "internal/agentconf/models.go": ["modelConfig", "setField", "validateModel"], // agent/model_config.go, model_manager.go there
+    "internal/agentconf/models_test.go": ["modelConfig"], // the struct the format is a rendering of
+    "internal/agent/sessions.go": ["cmdIdle"], // the command registry's idle-only class, in AlayaCore
+    // A name this tree deleted with the merge that lived in `internal/agent/models.go`: the comment says so.
+    "internal/server/routes_models.go": ["mergeModelSync"],
 };
 
 function walk(dir, extensions, out = []) {

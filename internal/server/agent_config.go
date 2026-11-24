@@ -1,10 +1,12 @@
 package server
 
-// The agent's configuration, and the one file the server writes into it.
+// The agent's configuration, and the two files the server writes into it.
 //
 // There is one configuration directory, shared by every session: `<UserConfigDir>/comfyloft/
 // alayacore/`. The operator's `model.conf` lives there and so does the `mcp.conf` this server writes at
-// startup. The parent is the product's name, not the binary's (#350): `comfyloft-server` names one of the two
+// startup — the models are written by `routes_models.go`, from the same window that shows them, and the
+// bridge below is written on every start. Both go through `internal/agentconf`, which is the one place that
+// knows the file's syntax. The parent is the product's name, not the binary's (#350): `comfyloft-server` names one of the two
 // programs here, and the agent's directory is not that program's. It used to carry the bind address, then the
 // machine name, and both cost the operator their models whenever that one string changed — the models are the
 // operator's, and one operator has one set of keys (#245). Two servers sharing one home directory are told
@@ -21,13 +23,13 @@ package server
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"comfyloft/internal/agent"
+	"comfyloft/internal/agentconf"
 	"comfyloft/internal/mcpstdio"
 	"comfyloft/internal/util"
 )
@@ -50,7 +52,7 @@ func (s *Server) writeMCPConf() {
 		// so say where the file was expected rather than leaving the turn to explain it.
 		s.logger.Warn("agent: %s is missing; every agent session will fail at its MCP handshake (build it with `make build`, or point MCP_BIN at it)", bridge)
 	}
-	content := fmt.Sprintf("server: canvas\ncommand: %q\nargs: []\nproto-version: %s\n", bridge, mcpProtocolVersion)
+	content := agentconf.FormatMCP(agentconf.MCP{Server: "canvas", Command: bridge, ProtoVersion: mcpProtocolVersion})
 	if err := os.MkdirAll(s.cfg.AgentConfigPath, 0o755); err != nil {
 		s.logger.Warn("agent: cannot create %s: %s", s.cfg.AgentConfigPath, err)
 		return
@@ -58,7 +60,7 @@ func (s *Server) writeMCPConf() {
 	// Written through a temporary file in the same directory: a session spawned while the server is rewriting this
 	// must find either the old file or the new one, never half of either.
 	target := s.mcpConfPath()
-	if err := util.WriteFileAtomic(target, []byte(content)); err != nil {
+	if err := util.WriteFileAtomic(target, content); err != nil {
 		s.logger.Warn("agent: cannot write %s: %s", target, err)
 	}
 }

@@ -201,15 +201,6 @@ export function agentSession(name: string): AgentSession {
  */
 export const canvasAgent = (canvasId: string) => `canvas:${canvasId}`;
 
-/**
- * The models editor's session.
- *
- * The list of models is the agent's — announced at startup and restated after a change — so editing it
- * needs one. It is not a canvas and keeps no conversation: the preferences window opens it while it is on
- * screen and drops it when it closes, and the only thing it is ever asked is `model_sync`.
- */
-export const settingsAgent = "settings";
-
 function socketUrl(config: AiConfig, name: string): string {
     const root = serverProtocolRoot(config.baseUrl);
     // Where the conversation is kept is the name's business, and the server answers it: a canvas keeps one in

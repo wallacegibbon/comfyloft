@@ -2260,8 +2260,8 @@ agent to reap and no TTL.
 
 **Still open** Where the H3 wording lives: an Agent Skill read with `read_file` (one extra step, and read access)
 or `--system` assembled at spawn (one step, no file access) — the answer waits on a measured comparison. The
-agent's settings page, when it comes, must write through `CI model_sync`, never by parsing `model.conf`: that
-file's format belongs to AlayaCore.
+agent's settings page, when it comes, writes the file itself (`internal/agentconf`) and has the agent re-read it
+(`:model_load`): #363, which replaces this entry's `CI model_sync` — that command left the wire in version 19.
 
 **Where** `internal/agent/{spawn,wire,run,sessions}.go`, `internal/server/routes_agent.go`, `internal/ws`.
 
@@ -5786,6 +5786,10 @@ change). `npm run check` (zh 825 / en 811 keys), `npx vitest run`, `npm run buil
 
 ## 201. The agent's models are edited through the agent, and the key stays on the gateway
 
+_(Superseded by #363, after AlayaCore's wire version 19 removed `:model_sync`: the list is now written by the
+server, and the agent is only asked to re-read it. What survives from this entry is the rule it argued for — the
+key never leaves the server, and the page is shown `hasKey`.)_
+
 **Decision** The preferences window has an **Agent models** section: one row per model the agent announces (name,
 protocol, what it points at, its key as six dots), a pencil and a cross, and **Add model** opening a form (name,
 model id, URL, protocol, API key). Every change goes to the agent as its own `:model_sync` carrying the whole
@@ -7534,7 +7538,8 @@ stopping the server: the agent exits on the frame, logging a clean `exit pid=…
 **Decision** A model's `model.conf` entry is editable in full from the preferences window. The page is shown
 every field but the key — `context_limit`, `max_tokens`, `reasoning_0/1/2`, `reasoning_field`,
 `serial_tool_calls` joined the five that were there — and every one of them is a field the merge will replace
-(`agent.modelEditorFields`). The three reasoning blocks are edited as **JSON text**, because that is what they
+(`mergeModels`, `internal/server/routes_models.go`; this entry named `agent.modelEditorFields`, which #363 moved
+to the file). The three reasoning blocks are edited as **JSON text**, because that is what they
 are, and a cleared box sends `null`, which removes the block.
 
 **What was wrong** The form showed five fields and the server replaced four. AlayaCore's entry has twelve:
@@ -7565,9 +7570,9 @@ displayed it, so emptying the box is a decision, and it is sent as `null` and me
 does not know these fields exist, so it must not be able to delete them.
 
 **Where the refusal lives** A block that is not a JSON **object** is refused twice: the form keeps Save off and
-says which of the two things is wrong (`reasoningError`), and the merge refuses it again with a sentence naming
-the field (`model_sync: reasoning_1 must be a JSON object, or empty to remove it`). The second exists because
-the first is a browser: the blocks go into a request body as they stand, so a string or an array would be a
+says which of the two things is wrong (`reasoningError`), and the server refuses it again with a sentence naming
+the field (`reasoning_1 must be a JSON object, or null to remove it`; #363). The second exists because the first
+is a browser: the blocks go into a request body as they stand, so a string or an array would be a
 request AlayaCore sends malformed, and `model.conf` is not a file to learn that from.
 
 **Numbers as text in the form** `contextLimit` and `maxTokens` are strings in the draft, not numbers: a
@@ -7684,7 +7689,7 @@ with per-profile keys can only live where the keys are. The page is shown `hasKe
 `agent.Model` is. The form's only keys are the ones the user has just typed.
 
 **The five rules that make one list safe to write from two windows** The whole list goes back in the page's order, so
-a missing entry is a deleted profile — the same rule `model_sync` takes, and one atomic rename rather than a sequence
+a missing entry is a deleted profile — the same rule `model.conf`'s save takes (#363), and one atomic rename rather than a sequence
 of edits that can half-apply. An entry that arrives **without a `key` field says nothing** about the stored key, which
 is how a key survives an edit to the address; `""` removes it, and removing one is a checkbox, because a blank field
 cannot mean both "keep" and "delete". An **id the server does not have is refused** (`speech_profile_unknown`, 400)
@@ -7876,7 +7881,7 @@ mentioned keeps what is stored.
 OpenAI-format endpoint takes image, audio and video; an Anthropic one image and document), `[]` as *declared, no
 media*, and a list as itself. A row of checkboxes alone can only say two things, so whichever of the first two it
 collapses becomes unreachable — and the worse direction is the silent one: a model whose `[]` travels as an absent
-field comes back through `model_sync` as a model that takes everything its protocol carries. AlayaCore keeps those
+field is stored back as a model that takes everything its protocol carries. AlayaCore keeps those
 two apart for the same reason (`json:"input_modalities"` with no `omitempty`, and the key in `fatalParseKeys`), and
 this wire follows: `agent.Model.InputModalities` has no `omitempty`, like `serialToolCalls` (#249), so
 `"inputModalities":null` is always present and always means "not declared".
@@ -8844,9 +8849,9 @@ conversation content is persisted. So the choice was never "a file for the model
 rule or two". The name decides where, and a name with nowhere has nothing.
 
 **Cost** The models editor cannot ask for a file even if a future one wanted to; that would have to be a name
-with a home, not a flag. The models editor keeps its session, because it cannot not: `model.conf` is a
-`---`-separated hand-edited file and AlayaCore is the only thing that writes it, so `model_sync` needs a process
-to send it to. What a canvas gains is that it cannot forget its conversation any more.
+with a home, not a flag. At the time, the models editor kept a session because it could not not: `model_sync` needed
+a process to send it to. (#363 removed that: the editor writes `model.conf` itself and has a running agent re-read
+it, so it keeps no session at all.) What a canvas gains is that it cannot forget its conversation any more.
 
 **Tested** `TestTheNameDecidesWhetherTheConversationIsKept` (a canvas is spawned with a file inside its own
 directory, `settings` with none, and a missing canvas is still an error), `go test ./...`, `make check`, `npx tsc --noEmit`, `npm run check`, `npx vitest run`, `npm run build`. The
@@ -11436,10 +11441,10 @@ said the seconds were counted here), `frontend/tests/agent-transcript.test.ts`.
 the wire's own content items and a flush (`UX`…, `UE`), and what comes back is relayed as the frames it arrived
 as — no translation of a message into "a turn started", no summary of a step into a status. The state this side
 may hold is of exactly two kinds: (1) what the agent has said and will not say again — the conversation's frames
-(`transcript`: a process replays its session file only when it starts, and says the rest once), its startup
-broadcast and its later statements about itself (`startup`: models, active model, level, usage), and the raw model
-entries `model_sync` has to round-trip because a canvas cannot see their keys; (2) routing for one socket or one
-tool call (`sink`, `watchGeneration`, `pending`). Everything else is a fact the agent owns, and the session reads
+(`transcript`: a process replays its session file only when it starts, and says the rest once) and its startup
+broadcast and later statements about itself (`startup`: the model list a picker is drawn from, the active model,
+the level, the usage) — none of them with a key in it, which is why no model entry is kept whole any more (#363);
+(2) routing for one socket or one tool call (`sink`, `watchGeneration`, `pending`). Everything else is a fact the agent owns, and the session reads
 it off the frame that says it: the turn in flight off `task` (#342), the model list off `model_list`, a failure off
 `error`. The session may *timestamp* what the agent announced — the age of a turn is its own measurement of an
 announcement — but it may not decide what the announcement would have been.
@@ -11598,9 +11603,9 @@ process restores it (`session.go`) — so the restart that hid the bug is the sa
 list, when the list holds one; `state.active` is left as the agent stated it, and a list that does not name the
 active model leaves the stated limit standing.
 
-**Why** The limit belongs to the entry, and the entry is what an editor rewrites: `model_sync` replaces
-`model.conf`, the agent restates the list to every session, and the `model` frame is sent again only to the session
-that did the sync (`SwitchModel`). Every other open canvas therefore held a copy of the old limit, and the panel
+**Why** The limit belongs to the entry, and the entry is what an editor rewrites: the save writes `model.conf`,
+`model_load` makes an agent re-read it, and the `model` frame is sent again only to the session that reloaded
+(`SwitchModel`). Every other open canvas therefore held a copy of the old limit, and the panel
 draws `22K/262144` with it — a denominator that is wrong until that session's own agent happens to restate `SM
 model`, which for a canvas nobody switches a model on is never. Measured on the fake agent before the fix: with id
 1 edited from 1000 to 5000, another session's snapshot still said 1000. It is the same fault as #346 one field
@@ -12541,3 +12546,101 @@ the strings and the states that draw them, not against a browser.
 `frontend/src/components/canvas/canvas-agent-panel.tsx` (`applyEvent` asks it once; `turnLines` carries no
 count), `frontend/src/i18n/locales/{zh-CN,en-US}.ts` (`workingQueued`, `steeringQueued`),
 `internal/agent/sessions.go` (`noteSteering`'s comment, re-anchored to what the number is used for).
+
+
+## 363. The model list is a file the server writes, and the agent is only asked to re-read it
+
+**Decision** `model.conf` is read and written by the server, for the preferences window: `GET /api/agent/models`
+answers the list, `PUT` takes the whole list back and writes the file, and every live agent is then sent
+`:model_load`. The syntax lives in `internal/agentconf`, once, for both files the server owns (`model.conf` and
+`mcp.conf`). The models editor is an HTTP call, not a session: there is no `settings` agent process, no socket, and
+nothing about editing models that needs AlayaCore to be running.
+
+**Why it had to change** AlayaCore's wire version 19 removed `:model_sync`, the command that took a list and
+rewrote the file (its `docs/architecture.md`). What it left is `:model_load`, which re-reads the file a process
+already has on disk — the model list is written in exactly one place now. So #201's "the editor writes through the
+command plane" has no command to write through, and the choice is not "the server writes it or AlayaCore does": it
+is "the server writes it" or "models cannot be edited from the canvas".
+
+**Why the editor must not need an agent** A `model.conf` with no usable model stops AlayaCore before it is ready
+(`internal/app/session.go` there: `HasModels` is fatal), and its own error says "Please edit the model config
+file". An editor that opened a session to be shown the list was therefore unusable in exactly the state it exists
+to repair — the user had to reach for a text editor and then, with any luck, restart. Measured: with the editor on
+a session, a config whose every block is rejected shows "agent could not be started, so its models cannot be
+listed" and no rows.
+
+**Why one file and one format package** `mcp.conf` was always the server's, written at every start, in AlayaCore's
+own key-value syntax (`internal/config/parser.go` there is the reader) — so "the server does not write AlayaCore's
+configuration" was never true, and #75's note about never parsing `model.conf` was about not inventing a second
+path to models. `internal/agentconf` is now that path for both files: blocks on `---`, `key: value`, the four
+escapes AlayaCore unquotes, JSON for lists and provider blocks, and AlayaCore's field order with its `omitempty`
+rules on the way out. It also fixed a real bug on the way: `writeMCPConf` used `%q`, which escapes a tab as `\t`
+and non-ASCII as `\u00e9` — sequences AlayaCore's reader keeps as the characters it sees, so a path containing
+either was written wrong.
+
+**What that deletes** #201's completion machinery (`Session.mergeModelSync`, `Sessions.ModelSync`, `tellModels`,
+`Session.adoptModels`), the socket interception that rewrote a command on its way in, `redactKeys`' second
+alternation for a key one quote deeper inside a command argument, the `settings` session and its one-command
+lifetime, and the frontend's session plumbing for the editor (open, close, subscribe, `connected` gating). The merge
+itself survives in one place (`mergeModels`, `internal/server/routes_models.go`) because the page still cannot see
+a key: an entry with no `api_key` keeps the stored one, a typed key replaces it, and a reasoning block or
+`input_modalities` is replaced only when the entry mentions it, `null` meaning "remove".
+
+**Why AlayaCore's validation is copied here** `agentconf.Model.Validate` mirrors `validateModel` and
+`baseURLProblem` there — required `model_name`, a known `protocol_type`, an absolute `base_url` with an http(s)
+scheme and a host, the modalities vocabulary, reasoning blocks that are objects — plus the duplicate name, which
+AlayaCore resolves by keeping the first and dropping the rest. A file this server writes has to be a file that
+loads: a rejected block is a model that disappears from the picker, and the only trace is a line on the agent's
+stderr at the next start. So a save that would produce one is refused with the reason, whole, and the file is not
+touched (`WriteFileAtomicMode`, 0600 — it holds keys, which is the mode AlayaCore's own writer uses).
+
+**What is preserved, and why that matters more than tidiness** Anything this build does not understand is kept: a
+comment line, a key a newer AlayaCore added, a value that would not parse. They travel in `Model.extra` and are
+written back at the end of their block, so an edit from the canvas can never delete a line the canvas has never
+seen — which is what #201 bought by keeping the announced entry as raw JSON, done one layer better (the file is
+the truth, so a field added to it by a newer core survives even though this build has never heard of it). The file
+becomes machine-shaped where it is written: comments and unknown keys keep their text but move to the end of the
+block, and the fields this build knows are written in AlayaCore's own order.
+
+**Why `model_load` is deferred rather than forced** The command is idle-only in AlayaCore (`cmdIdle`), so a session
+in the middle of a turn refuses it. `Session.ReloadModels` remembers instead and the pump sends it when that turn
+ends: a canvas that was generating while the models were edited would otherwise hold a stale list — and, worse, a
+stale key — until its process happened to restart. This is the one place the change reaches into the session, and
+it is fifteen lines: a flag beside `busy`, and the write at the end of the turn.
+
+**Cost** The field table in `agentconf` has to follow AlayaCore: a new editable option is preserved on disk but
+cannot be edited from the form until it is added there (the same debt `speech.json` carries). The editor's write is
+the whole file, so two preferences windows open at once are last-writer-wins — unchanged from #201. A session that
+is mid-turn keeps the old list until the turn ends, where #201 at least told the other sessions its own view of the
+list immediately (that view was never the agent's, which is why #347 had to derive the context limit from the list).
+
+**Tested** `internal/agentconf`: a hand-written fixture round-trips (comments, single-quoted and bare values,
+`---`, three reasoning blocks, `input_modalities` as `[]` and absent), the output is pinned field by field against
+what AlayaCore's own writer emits, the four escapes survive a name with quotes, a backslash, a tab and a newline,
+a value that does not parse is kept and reported, a line that is not a field and a duplicated key are reported
+once each, a block with no name is not a model, CRLF is one file with blocks, and every rule of `Validate` refuses
+what AlayaCore would skip. `internal/server` (`routes_models_test.go`): the editor works with no agent at all (a
+list read, a model renamed, one added with its key, one deleted with its key gone from the file, 0600, and zero
+spawns), a write reaches a live agent as `model_load` and the canvas is told the restated list without a key, every
+invalid entry is refused and the file is byte-identical afterwards, an id the file does not have is a 409, a file
+with an unparsable value and a stray line is shown with its problems and both lines survive a save, and a server
+with no `AGENT_CONFIG_PATH` says so instead of writing next to its own working directory.
+`mcp.conf`'s own test now asserts the quoted form. `internal/agent`: the restated list still carries the count the
+agent last stated, through the real `:model_load` path instead of the deleted `adoptModels`. Frontend: the payload
+is an array (the transport adds `{models}`), and its 24 tests pass unchanged in substance. `make check`, `npm run
+check` (i18n, exports, decisions, comment names, prettier), `npm run build`, `go test -race` on the three packages
+this touches. Read end to end against the real AlayaCore (`v0.100.1`, message_version 18 — the installed binary
+still has `:model_sync`, so it also checks that the new path does not need v19): a rendered file is announced back
+with every field intact (`context_limit`, `reasoning_0/1`, `reasoning_field`, `serial_tool_calls`,
+`input_modalities` as both a list and `[]`) and no error frames, `:model_load` answers with a restated list on it,
+a hand-written file with a comment and an unknown key keeps both while AlayaCore reports the unknown key and keeps
+the model, and the server's own `PUT` into an empty configuration directory writes a file that binary reads
+without complaint. Not watched on a screen: the window's four controls were checked against the states that draw
+them, not against a browser.
+
+**Where** `internal/agentconf/{agentconf,models,mcp}.go` (the syntax and the format), `internal/server/routes_models.go`
+(the routes, `mergeModels`, `validateModels`, the reload), `internal/server/agent_config.go` (`mcp.conf` through the
+same writer), `internal/agent/{sessions,events}.go` (`ReloadModels`, the deferred reload, `modelEntry` — the key is
+no longer kept in memory at all), `internal/server/routes_agent.go` (no interception),
+`frontend/src/services/api/agent-models.ts`, `frontend/src/lib/agent-models.ts`,
+`frontend/src/components/settings/agent-models-section.tsx`.

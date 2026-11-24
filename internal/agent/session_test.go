@@ -35,6 +35,11 @@ while IFS= read -r line; do
         *)
           printf 'CO{"command_id":"1","is_error":true,"result":{"code":"REQUEST_MODEL_UNKNOWN","message":"model_set: model not found: 9"}}\n' ;;
       esac ;;
+    CI*'"name":"model_load"'*)
+      # The file changed and the agent re-read it: the list is restated with the ids it has just assigned, and
+      # the command answers. This is the one thing the model editor asks a running agent for (v19).
+      printf 'SM{"type":"model_list","data":{"models":[{"id":1,"name":"Fake / one","protocol_type":"openai","base_url":"http://127.0.0.1:1/v1","api_key":"secret-key","model_name":"m","context_limit":1000}]}}\n'
+      printf 'CO{"command_id":"1","result":{"models":[{"id":1,"name":"Fake / one"}]}}\n' ;;
     CI*'"name":"reasoning_level_set"'*)
       printf 'SM{"type":"reasoning_level","data":{"level":2}}\n'
       printf 'CO{"command_id":"1","result":{"level":2}}\n' ;;
@@ -514,23 +519,65 @@ func TestSessionKeepsTheCountItRestates(t *testing.T) {
 			again.Startup.ContextTokens, again.Startup.StepTps, last.ContextTokens, last.StepTps)
 	}
 
-	// The same statement rides the list restated to every other session when one of them edits the models —
-	// what `tellModels` does — so a canvas with the count on screen does not lose it to a save in the
-	// settings window, without any reload at all.
-	fs.session.adoptModels(fs.session.snapshot().models)
-	restated := -1
-	events := fs.watcher.all()
-	for index, event := range events {
-		if event.Type == "models" {
-			restated = index
-		}
+	// The same statement rides the list the agent restates after it re-reads `model.conf` (`:model_load`, which
+	// is what the preferences window asks for), so a canvas with the count on screen does not lose it to a save
+	// in that window — the list is replaced, the count the agent last stated is not.
+	if err := fs.session.Send(Request{Command: "model_load"}); err != nil {
+		t.Fatalf("model_load: %v", err)
 	}
-	if restated < 0 {
-		t.Fatalf("no restated list was relayed; events: %+v", events)
-	}
-	if got := events[restated]; got.ContextTokens != last.ContextTokens || got.StepTps != last.StepTps || got.TtftMs != last.TtftMs {
+	restated := fs.watcher.waitFor(t, "the restated list", func(event Event) bool {
+		return event.Type == "models" && len(event.Models) == 1
+	})
+	if restated.ContextTokens != last.ContextTokens || restated.StepTps != last.StepTps || restated.TtftMs != last.TtftMs {
 		t.Errorf("the restated list carries %d tokens and %v tok/s, want %d and %v",
-			got.ContextTokens, got.StepTps, last.ContextTokens, last.StepTps)
+			restated.ContextTokens, restated.StepTps, last.ContextTokens, last.StepTps)
+	}
+}
+
+// A model list written in the middle of a turn is re-read when the turn ends: `:model_load` is idle-only in
+// AlayaCore, so a session that is working keeps the list it has — and is asked the moment it stops, because the
+// alternative is a canvas holding a stale address and a stale key until its process happens to restart (#363).
+func TestAModelReloadWhileWorkingIsAskedForWhenTheTurnEnds(t *testing.T) {
+	fs := openFakeSession(t)
+	session, watcher, log := fs.session, fs.watcher, fs.log
+
+	// A turn that runs for a second — the window a save from the preferences window can land in.
+	if err := session.Send(Request{Prompt: "wait first"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	// The message opens the turn as it is written, before the agent has said anything at all (#349).
+	if !session.Busy() {
+		t.Fatal("the prompt did not open a turn")
+	}
+	if session.ReloadModels() {
+		t.Fatal("a session in the middle of a turn was told to reload: the agent would refuse it")
+	}
+	if frames, err := os.ReadFile(log); err == nil && strings.Contains(string(frames), "model_load") {
+		t.Fatalf("model_load was written into a running turn: %s", frames)
+	}
+
+	// The turn ends, and the deferred reload goes out with it: the agent re-reads the file and restates the list.
+	watcher.waitFor(t, "the end of the turn", func(event Event) bool { return event.Type == "done" })
+	restated := watcher.waitFor(t, "the list the agent restated after the reload", func(event Event) bool {
+		return event.Type == "models" && len(event.Models) == 1
+	})
+	if restated.Models[0].Name != "Fake / one" {
+		t.Errorf("restated list = %+v, want the one the fake agent read back", restated.Models)
+	}
+	frames, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("read the agent's frames: %v", err)
+	}
+	if !strings.Contains(string(frames), `"name":"model_load"`) {
+		t.Errorf("the agent was never told to reload: %s", frames)
+	}
+
+	// A session that is idle is told at once, and nothing is left over for the end of the next turn.
+	if !session.ReloadModels() {
+		t.Fatal("an idle session deferred a reload it could have sent")
+	}
+	if session.takeReload() {
+		t.Error("a reload that went out was still remembered for the next turn")
 	}
 }
 
